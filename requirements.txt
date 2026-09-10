@@ -1,0 +1,22 @@
+# Core app
+streamlit>=1.38
+pandas>=2.0
+Pillow>=10.0
+python-dotenv>=1.0
+cryptography>=43.0
+
+# LLM providers (install only the ones you register in ⚙️ 설정)
+openai>=1.40
+anthropic>=0.34
+google-genai>=1.0
+
+# News curation
+requests>=2.32
+beautifulsoup4>=4.12
+feedparser>=6.0
+
+# Naver semi-automatic publish (needs `playwright install chromium` once)
+playwright>=1.46
+pyperclip>=1.9
+
+# NOTE: no `supabase` — the whole data layer is local SQLite (core/db.py).

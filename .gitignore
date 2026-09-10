@@ -1,0 +1,14 @@
+# 로컬 데이터: DB, 업로드 사진, 암호화 마스터 키, 네이버 세션 쿠키.
+# 특히 .master_key 와 naver_state.json 은 절대 커밋하지 마세요.
+data/
+
+# 회사 원본 문서(제품제안서·사업신청서·교안 PDF). 여기서 뽑아 정리한 브랜드 킷은
+# core/brand_seed.py 에 텍스트로 들어 있으므로, 원본 없이도 앱은 그대로 동작합니다.
+company_info/
+
+.venv/
+__pycache__/
+*.pyc
+.env
+.DS_Store
+.playwright-mcp/
