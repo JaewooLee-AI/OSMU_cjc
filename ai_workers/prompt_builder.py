@@ -89,7 +89,20 @@ def seo_block(brand_kit: dict, hint: str = content_mode.HINT_RELEVANCE) -> List[
     honest signal than one filling a quota. Enforcement stays where it can
     be measured and undone: `seo_optimizer`.
     """
-    keywords = brand_kit.get("seo_keywords") or []
+    from ai_workers import seo_optimizer
+
+    # 브랜드 어휘는 아예 보여주지 않습니다. 목록에 있으면 모델은 그 글의 주제와
+    # 상관없이 그것부터 집는데(자기 브랜드 이야기가 항상 '맞는' 것처럼 보이니까),
+    # 그 단어들은 용어집과 core_facts를 통해 어차피 본문에 들어갑니다.
+    #
+    # 순서도 무작위로 두지 않습니다. 모델은 목록 앞쪽을 먼저 고르는 경향이 있고,
+    # 하류의 타깃 선정이 이미 '기회 × 전환 가중치' 순으로 고르므로, 보여주는
+    # 순서를 같은 기준으로 맞춰 두 단계가 서로 다른 키워드를 밀지 않게 합니다.
+    keywords = seo_optimizer.competing_keywords(
+        brand_kit.get("seo_keywords") or [], brand_kit.get("non_target_keywords")
+    )
+    weights = brand_kit.get("keyword_weights")
+    keywords = sorted(keywords, key=lambda kw: -seo_optimizer._opportunity(kw, weights))
     if not keywords or hint == content_mode.HINT_NONE:
         # '내용 우선' never shows the pool at all. Naming keywords and then
         # saying "only if they fit" still anchors the draft toward them; the

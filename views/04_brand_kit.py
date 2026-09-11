@@ -129,12 +129,17 @@ with st.form("brand_kit_form"):
         unsafe_allow_html=True,
     )
     keyword_weights = existing.get("keyword_weights") or {}
+    non_target = set(existing.get("non_target_keywords") or [])
     keywords_df = pd.DataFrame(
         [
-            {"키워드": k, "전환 가중치": float(keyword_weights.get(k, 1.0))}
+            {
+                "키워드": k,
+                "전환 가중치": float(keyword_weights.get(k, 1.0)),
+                "검색 타깃": k not in non_target,
+            }
             for k in (existing.get("seo_keywords") or [])
         ],
-        columns=["키워드", "전환 가중치"],
+        columns=["키워드", "전환 가중치", "검색 타깃"],
     )
     edited_keywords = st.data_editor(
         keywords_df,
@@ -144,8 +149,18 @@ with st.form("brand_kit_form"):
         column_config={
             "전환 가중치": st.column_config.NumberColumn(
                 min_value=0.0, max_value=10.0, step=0.1, format="%.1f", default=1.0
-            )
+            ),
+            "검색 타깃": st.column_config.CheckboxColumn(default=True),
         },
+    )
+    st.caption(
+        "🏷️ **검색 타깃**을 끄면 그 키워드로는 검색 노출을 노리지 않습니다 — 초안 프롬프트의 "
+        "키워드 목록에서 빠지고, 타깃 슬롯도 제목도 맡지 않습니다. 다만 풀에는 남아 있어 "
+        "본문에는 계속 등장하고, 제목 반복 검사에서도 '반복돼도 되는 단어'로 계속 취급됩니다. "
+        "**브랜드 어휘가 여기 해당합니다** — `더봄봄`은 월 15회, `한복 새활용`은 월 10회밖에 "
+        "검색되지 않아, 이 단어로 제목을 지으면 그 글의 검색 노출을 사실상 포기하는 셈입니다. "
+        "가중치를 낮추는 것과는 다릅니다: 가중치는 '이 유입이 얼마짜리인가'이고, 브랜드 유입은 "
+        "비싸지만 양이 없는 것뿐입니다."
     )
     st.caption(
         "⚖️ 컴플라이언스 검수가 제거하는 표현(예: '친환경 ○○')은 키워드로 두면 밀도를 "
@@ -193,7 +208,7 @@ if submitted:
         for _, row in edited_blacklist.iterrows()
         if pd.notna(row.get("금기어")) and str(row["금기어"]).strip()
     }
-    new_keywords, new_weights = [], {}
+    new_keywords, new_weights, new_non_targets = [], {}, []
     for _, row in edited_keywords.iterrows():
         keyword = str(row.get("키워드") or "").strip()
         if not keyword or not pd.notna(row.get("키워드")) or keyword in new_weights:
@@ -204,6 +219,12 @@ if submitted:
         # the neutral weight — not zero, which would silently retire the
         # keyword the marketer just typed in.
         new_weights[keyword] = float(weight) if pd.notna(weight) else 1.0
+        # Same reasoning for the checkbox: a blank cell on a row the marketer
+        # just typed means they have not opted out, so the keyword competes.
+        # Only an explicit uncheck retires it from targeting.
+        is_target = row.get("검색 타깃")
+        if pd.notna(is_target) and not bool(is_target):
+            new_non_targets.append(keyword)
 
     repo.save_brand_kit(
         brand_name=brand_name,
@@ -219,6 +240,7 @@ if submitted:
         terminology=new_terminology,
         seo_keywords=new_keywords,
         keyword_weights=new_weights,
+        non_target_keywords=new_non_targets,
         default_content_mode=default_content_mode,
         blacklist_map=new_blacklist,
         few_shot_samples=few_shot_samples,

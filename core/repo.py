@@ -31,6 +31,7 @@ _BRAND_KIT_JSON_COLS = {
     "terminology": {},
     "seo_keywords": [],
     "keyword_weights": {},
+    "non_target_keywords": [],
     "blacklist_map": {},
 }
 

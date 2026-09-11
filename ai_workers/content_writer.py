@@ -418,7 +418,11 @@ def run_pipeline(campaign_id: str, progress: Progress = None) -> Dict:
             + (
                 [
                     _title_generation_instruction(
-                        title_candidates(seo_keywords, brand_kit.get("keyword_weights")),
+                        title_candidates(
+                            seo_keywords,
+                            brand_kit.get("keyword_weights"),
+                            brand_kit.get("non_target_keywords"),
+                        ),
                         source_title,
                     )
                     + avoidance_instruction(title_history)
@@ -457,6 +461,7 @@ def run_pipeline(campaign_id: str, progress: Progress = None) -> Dict:
         target_keywords = select_target_keywords(
             final_title, draft, seo_keywords, limit=mode["max_targets"],
             weights=brand_kit.get("keyword_weights"), min_mentions=mode["min_mentions"],
+            non_targets=brand_kit.get("non_target_keywords"),
         )
         skipped_keywords = [kw for kw in seo_keywords if kw not in target_keywords]
 
@@ -469,7 +474,11 @@ def run_pipeline(campaign_id: str, progress: Progress = None) -> Dict:
         # see seo_optimizer.title_candidates. Without this the backstop puts
         # back exactly what the generation instruction was just stopped from
         # asking for.
-        title_eligible = title_candidates(target_keywords, brand_kit.get("keyword_weights"))
+        title_eligible = title_candidates(
+            target_keywords,
+            brand_kit.get("keyword_weights"),
+            brand_kit.get("non_target_keywords"),
+        )
         if needs_title and title_eligible and mode["rewrite_title"]:
             title_missing_keywords = title_keyword_coverage(final_title, title_eligible)
             if title_missing_keywords:
@@ -698,6 +707,7 @@ def revise_content(
         target_keywords = select_target_keywords(
             final_title, revised, seo_keywords, limit=mode["max_targets"],
             weights=brand_kit.get("keyword_weights"), min_mentions=mode["min_mentions"],
+            non_targets=brand_kit.get("non_target_keywords"),
         )
         skipped_keywords = [kw for kw in seo_keywords if kw not in target_keywords]
 

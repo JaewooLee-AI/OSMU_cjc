@@ -101,7 +101,9 @@ def _weight_of(keyword: str, weights: dict | None) -> float:
         return DEFAULT_KEYWORD_WEIGHT
 
 
-def title_candidates(keywords: list[str], weights: dict | None) -> list[str]:
+def title_candidates(
+    keywords: list[str], weights: dict | None, excluded: list[str] | None = None
+) -> list[str]:
     """The keywords allowed to claim the title, as opposed to the body.
 
     A weight below the neutral default is the brand saying this traffic
@@ -119,11 +121,24 @@ def title_candidates(keywords: list[str], weights: dict | None) -> list[str]:
     news sweep still searches them. They simply cannot be what the post
     announces itself as.
 
-    Returns [] when every keyword is demoted, and callers must handle that by
-    leaving the title alone — forcing the least-bad demoted keyword back in
-    would reinstate exactly the behaviour this removes.
+    `excluded` is the second, separate reason a keyword cannot hold a title:
+    brand vocabulary. '더봄봄' draws 15 searches a month and '한복 새활용' 10,
+    so a title built on either forfeits the exposure the title exists to win —
+    but both must keep appearing in the body, and both are needed in the pool
+    so the variety check knows they are allowed to repeat across titles. They
+    are not demoted, because weight means what that traffic is worth and brand
+    traffic is worth plenty; there just isn't any. Two different problems, two
+    different inputs.
+
+    Returns [] when every keyword is ruled out, and callers must handle that
+    by leaving the title alone — forcing the least-bad one back in would
+    reinstate exactly the behaviour this removes.
     """
-    return [kw for kw in keywords if _weight_of(kw, weights) >= DEFAULT_KEYWORD_WEIGHT]
+    blocked = set(excluded or ())
+    return [
+        kw for kw in keywords
+        if kw not in blocked and _weight_of(kw, weights) >= DEFAULT_KEYWORD_WEIGHT
+    ]
 
 
 def _opportunity(keyword: str, weights: dict | None = None) -> float:
@@ -157,9 +172,23 @@ def _opportunity(keyword: str, weights: dict | None = None) -> float:
     return keyword_research.golden_score(float(volume), int(documents)) * _weight_of(keyword, weights)
 
 
+def competing_keywords(keywords: list[str], non_targets: list[str] | None) -> list[str]:
+    """The pool minus the words the brand isn't trying to rank for.
+
+    Brand vocabulary stays in `seo_keywords` because other machinery needs it
+    there — `title_variety` reads the pool to know which words are allowed to
+    repeat across titles, and dropping '더봄봄' from it would make every title
+    carrying the brand name look like a repeat of the last one. What it must
+    not do is take a slot in the competition: it is in the text either way.
+    """
+    blocked = set(non_targets or ())
+    return [kw for kw in keywords if kw not in blocked]
+
+
 def select_target_keywords(
     title: str, draft: str, keywords: list[str], limit: int = MAX_TARGETS_PER_POST,
     weights: dict | None = None, min_mentions: int = MIN_MENTIONS_TO_TARGET,
+    non_targets: list[str] | None = None,
 ) -> list[str]:
     """The keywords this particular post is actually about, best bets first.
 
@@ -185,6 +214,13 @@ def select_target_keywords(
     keyword in the pool (the draft may still use it, and the news search still
     searches it) while making sure it never takes a target slot.
 
+    `non_targets` removes brand vocabulary before ranking — see
+    `competing_keywords`. Without it the ranking is decided by whichever words
+    the draft repeats most, and the words a brand repeats most are its own
+    name and its own category: a batch run with every other fix in place still
+    produced targets of ['더봄봄', '한복 새활용'] on four posts out of five,
+    which between them draw 25 searches a month.
+
     **May return an empty list, and callers must handle that.** It means the
     post's subject has no home in the keyword pool. The previous fallback
     forced the pool's best-scoring keyword onto such a post so that "a post is
@@ -196,6 +232,7 @@ def select_target_keywords(
     contains no education keyword — instead of hiding it behind a post that
     ranks for nothing and reads as a product ad.
     """
+    keywords = competing_keywords(keywords, non_targets)
     if not keywords:
         return []
     counts = count_keyword_occurrences(f"{title}\n{draft}", keywords)

@@ -225,6 +225,23 @@ def propose(
     # the model — and listing it twice makes the revive checkboxes collide.
     excluded = list({r["keyword"]: r for r in excluded}.values())
 
+    # Anything the model simply didn't mention. It used to vanish: the loops
+    # above only ever read what came back, so a response covering 23 of 70
+    # offered keywords produced a proposal that looked complete and had
+    # quietly dropped 47. Measured on the first real sweep, the four lowest-
+    # competition finds — 노리개키링 at 6.7 documents per search among them —
+    # were all in the silent half.
+    #
+    # They go to `excluded`, which is the revivable list, rather than into a
+    # group: the model not judging a keyword is not the same as judging it
+    # good, and the UI already lets the marketer bring back anything there.
+    judged = {r["keyword"] for rows in groups.values() for r in rows}
+    judged.update(r["keyword"] for r in excluded)
+    for keyword, row in by_keyword.items():
+        if keyword in judged:
+            continue
+        excluded.append({**row, "reason": "AI가 판정하지 않음 — 직접 확인하세요"})
+
     # --- topic concentration (C-Rank) ---------------------------------------
     # Weight by search volume rather than keyword count: five niche terms in
     # one category shouldn't outrank two high-demand ones in another just by
