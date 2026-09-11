@@ -100,8 +100,12 @@ create table if not exists campaigns (
     content_mode        text,
     -- 공지·모집 글의 일시/장소/비용/신청 방법 (JSON 오브젝트, 빈 값은 저장하지
     -- 않음). 비어 있으면 일반 글입니다 — 별도 유형 플래그를 두지 않는 이유는
-    -- ai_workers/notice.py 참고.
+    -- ai_workers/factsheet.py 참고.
     notice_fields       text not null default '{}',
+    -- 답례품·굿즈 글의 가격대/최소수량/제작기간/규격/구매처. 같은 구조이고 같은
+    -- 이유로 존재합니다 — 검색해서 들어온 사람이 답을 못 찾으면 이탈하고, 그
+    -- 이탈이 노출 순위를 도로 깎습니다.
+    product_fields      text not null default '{}',
     storage_file_paths  text not null default '[]',
     guardrail_passed    integer,
     guardrail_report    text,
@@ -286,6 +290,7 @@ _ADDED_COLUMNS = {
         "source_title": "text",
         "content_mode": "text",
         "notice_fields": "text not null default '{}'",
+        "product_fields": "text not null default '{}'",
     },
     "brand_kit": {
         "keyword_weights": "text not null default '{}'",

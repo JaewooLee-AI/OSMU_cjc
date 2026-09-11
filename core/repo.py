@@ -16,6 +16,7 @@ from core.db import dumps, get_conn, loads
 # name -> default value when the column is empty/absent.
 _CAMPAIGN_JSON_COLS = {
     "notice_fields": {},
+    "product_fields": {},
     "storage_file_paths": [],
     "guardrail_report": None,
     "instagram_hashtags": [],

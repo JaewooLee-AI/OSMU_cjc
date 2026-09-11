@@ -51,7 +51,7 @@ from ai_workers.prompt_builder import (
     photo_context,
     photo_instruction,
 )
-from ai_workers import notice
+from ai_workers import factsheet
 from ai_workers import search_intent
 from ai_workers.proofreader import proofread
 from ai_workers.seo_optimizer import (
@@ -105,6 +105,11 @@ def _title_generation_instruction(seo_keywords: List[str], source_title: str = "
         f"제목 하나만 짧게 쓰세요.{keyword_line}"
     )
 
+# 이 아래면 '검색해서 들어온 사람이 답을 못 찾는 글'로 봅니다. 절반은 임의의
+# 선이지만, 노출을 목표로 하는 글에서 기대 항목의 절반도 답하지 못한다면 그건
+# 체류시간으로 드러나고 순위로 돌아옵니다 — _recommendation 참고.
+INTENT_COVERAGE_FLOOR = 50
+
 _TITLE_MARKER_RE = re.compile(r"^\s*\[TITLE:\s*(.+?)\]\s*\n+", re.IGNORECASE)
 
 Progress = Optional[Callable[[str], None]]
@@ -157,11 +162,33 @@ def _recommendation(report: Dict) -> Dict:
         and report.get("content_mode") != "rich"
     )
 
+    # 검색 의도 미충족은 이 글의 결함이 아니라 입력의 공백입니다. 답례품을
+    # 검색한 사람은 가격·최소수량·제작기간·주문 방법을 확인하러 오는데, 메모에
+    # 그 숫자가 없으면 어떤 모델도 쓸 수 없습니다. 첫 측정에서 돌답례품 글이
+    # 충족도 0%로 나왔고, 그 여섯 가지가 전부 비어 있었습니다.
+    #
+    # **다시 생성하라고 하지 않습니다.** 재생성으로는 없는 가격이 생기지 않고,
+    # 그렇게 안내하면 컴플라이언스 오탐이 만들었던 것과 같은 무한 루프가 됩니다.
+    # 채워야 할 입력으로 안내하는 것이 정확한 처방입니다.
+    #
+    # 노출이 목표라서 더 중요합니다 — 네이버 DIA는 체류시간을 보고, 검색해서
+    # 들어온 사람이 답을 못 찾고 나가면 그 신호가 순위를 도로 깎습니다.
+    intent = report.get("search_intent") or {}
+    intent_coverage = intent.get("coverage")
+    intent_gap = bool(
+        intent.get("checked")
+        and intent_coverage is not None
+        and intent_coverage < INTENT_COVERAGE_FLOOR
+    )
+    fact_gaps = []
+    for key, label in (("notice", "공지 정보"), ("product", "제품·주문 정보")):
+        section = report.get(key) or {}
+        if section.get("checked") and section.get("missing_labels"):
+            fact_gaps.append(f"{label}: {', '.join(section['missing_labels'])}")
+
     if reasons:
         verdict = "regenerate"
-    elif conflicts:
-        verdict = "settings"
-    elif no_targets:
+    elif conflicts or no_targets or intent_gap or fact_gaps:
         verdict = "settings"
     else:
         verdict = "ok"
@@ -170,6 +197,10 @@ def _recommendation(report: Dict) -> Dict:
         "reasons": reasons,
         "conflicts": conflicts,
         "no_targets": bool(no_targets),
+        "intent_gap": intent_gap,
+        "intent_coverage": intent_coverage,
+        "intent_missing": intent.get("missing") or [],
+        "fact_gaps": fact_gaps,
     }
 
 
@@ -192,6 +223,7 @@ def _quality_pass(
     progress: Progress,
     mode: Optional[dict] = None,
     notice_fields: Optional[dict] = None,
+    product_fields: Optional[dict] = None,
 ):
     """Stages 3~6c: compliance, SEO density, and the deterministic backstops.
 
@@ -317,7 +349,8 @@ def _quality_pass(
 
     # 공지 사실은 측정만 하고 고치지 않습니다 — 날짜와 금액을 LLM이 되살리게
     # 두는 것보다, 빠졌다고 알려주고 담당자가 편집기에서 넣는 편이 안전합니다.
-    report["notice"] = notice.coverage(final_content, notice_fields)
+    report["notice"] = factsheet.coverage(factsheet.NOTICE, final_content, notice_fields)
+    report["product"] = factsheet.coverage(factsheet.PRODUCT, final_content, product_fields)
 
     report["recommendation"] = _recommendation(report)
     return final_content, report
@@ -343,6 +376,7 @@ def run_pipeline(campaign_id: str, progress: Progress = None) -> Dict:
         given_title = (campaign.get("title") or "").strip()
         source_url = campaign.get("source_url")
         notice_fields = campaign.get("notice_fields") or {}
+        product_fields = campaign.get("product_fields") or {}
         is_news = campaign.get("source_type") == "news"
         seo_keywords = brand_kit.get("seo_keywords") or []
         mode = content_mode.resolve(campaign.get("content_mode"), brand_kit)
@@ -406,7 +440,7 @@ def run_pipeline(campaign_id: str, progress: Progress = None) -> Dict:
             )
         # 공지 정보는 뉴스/일반 어느 쪽이든 붙습니다 — 소재 설명 바로 뒤, 사진
         # 지시 앞에 와야 '이 글이 알려야 할 사실'로 읽힙니다.
-        seed_blocks += notice_block(notice_fields)
+        seed_blocks += notice_block(notice_fields, product_fields)
 
         prompt = "\n\n".join(
             seed_blocks
@@ -433,10 +467,12 @@ def run_pipeline(campaign_id: str, progress: Progress = None) -> Dict:
         )
 
         # 알릴 것이 적은 공지에서는 모드의 분량 목표를 걷어냅니다 —
-        # notice.is_brief 참고. 모드 선택 자체는 건드리지 않습니다: 키워드
+        # factsheet.is_brief_overall 참고. 모드 선택 자체는 건드리지 않습니다: 키워드
         # 압력은 연휴 공지에도 그대로 적용되어야 합니다.
         draft_mode = mode
-        if notice.is_brief(notice_fields) and mode.get("length_hint"):
+        if factsheet.is_brief_overall(
+            [(factsheet.NOTICE, notice_fields), (factsheet.PRODUCT, product_fields)]
+        ) and mode.get("length_hint"):
             draft_mode = {**mode, "length_hint": None}
 
         draft = generate_text(
@@ -530,6 +566,7 @@ def run_pipeline(campaign_id: str, progress: Progress = None) -> Dict:
         final_content, report = _quality_pass(
             draft, final_title, target_keywords, skipped_keywords, brand_kit, vendor,
             storage_file_paths, is_news, source_url, progress, mode, notice_fields,
+            product_fields,
         )
         report["title_dictionary_hits"] = title_dict_hits
         report["title_seo"] = {
@@ -673,16 +710,24 @@ def revise_content(
                 )
             )
 
-        # 줄여 쓰기 요청은 군더더기부터 덜어내는데, 공지 글에서 가장 군더더기처럼
-        # 보이는 줄이 정작 일시·비용·신청 방법입니다. 수정 호출이 실제로 일어날
-        # 때만 붙입니다.
-        if requests and notice.is_notice(campaign.get("notice_fields")):
-            kept = notice.clean(campaign.get("notice_fields"))
-            requests.append(
-                "[공지 정보 유지]\n다음 사실은 이 글의 존재 이유이므로 어떤 수정 "
-                "요청에도 본문에서 빼거나 바꾸지 마세요:\n"
-                + "\n".join(f"- {notice.LABELS[k]}: {v}" for k, v in kept.items())
-            )
+        # 줄여 쓰기 요청은 군더더기부터 덜어내는데, 공지·제품 글에서 가장
+        # 군더더기처럼 보이는 줄이 정작 일시·가격·주문 방법입니다. 수정 호출이
+        # 실제로 일어날 때만 붙입니다.
+        if requests:
+            kept_lines = []
+            for sheet, given in (
+                (factsheet.NOTICE, campaign.get("notice_fields")),
+                (factsheet.PRODUCT, campaign.get("product_fields")),
+            ):
+                kept_lines += [
+                    f"- {sheet.labels[k]}: {v}"
+                    for k, v in factsheet.clean(sheet, given).items()
+                ]
+            if kept_lines:
+                requests.append(
+                    "[핵심 정보 유지]\n다음 사실은 이 글의 존재 이유이므로 어떤 수정 "
+                    "요청에도 본문에서 빼거나 바꾸지 마세요:\n" + "\n".join(kept_lines)
+                )
 
         if requests:
             _report(progress, "수정 요청 반영 중…")
@@ -715,7 +760,7 @@ def revise_content(
             revised, final_title, target_keywords, skipped_keywords, brand_kit, vendor,
             storage_file_paths, campaign.get("source_type") == "news",
             campaign.get("source_url"), progress, mode,
-            campaign.get("notice_fields") or {},
+            campaign.get("notice_fields") or {}, campaign.get("product_fields") or {},
         )
         report["revision"] = {
             "instruction": instruction,

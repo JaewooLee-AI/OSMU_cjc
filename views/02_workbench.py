@@ -18,7 +18,7 @@ import streamlit as st
 import streamlit.components.v1 as components
 
 import simulators
-from ai_workers import content_mode, notice, vision
+from ai_workers import content_mode, factsheet, vision
 from ai_workers.content_writer import LENGTH_MODES, revise_content, run_pipeline
 from core import repo, storage
 
@@ -155,30 +155,35 @@ with editor_col:
         key=f"memo_{selected_id}",
     )
 
-    # 공지 글은 메모를 아무리 길게 써도 날짜나 신청 방법이 빠지면 공지가 되지
-    # 않습니다. 모드를 바꿔서 해결되는 문제가 아니라서 별도 입력을 둡니다 —
-    # ai_workers/notice.py 참고.
-    saved_notice = campaign.get("notice_fields") or {}
-    with st.expander(
-        "📣 공지 정보" + (f" ({len(notice.clean(saved_notice))}개 입력됨)" if saved_notice else ""),
-        expanded=bool(saved_notice),
+    # 메모를 아무리 길게 써도 날짜·가격·주문 방법이 빠지면 공지도 판매 글도 되지
+    # 않습니다. 모드를 바꿔서 해결되는 문제가 아니라 별도 입력을 둡니다 —
+    # ai_workers/factsheet.py 참고.
+    sheet_values = {}
+    for sheet, column in (
+        (factsheet.NOTICE, "notice_fields"),
+        (factsheet.PRODUCT, "product_fields"),
     ):
-        st.caption(
-            "연휴·휴무 안내, 강좌 모집, 행사·팝업 공지처럼 **독자에게 알려야 할 사실이 "
-            "있는 글**에 채우세요. **해당하는 항목만** 채우면 됩니다 — 전부 채울 "
-            "필요도, 정해진 조합도 없습니다. 예를 들어 추석 연휴 안내는 일시 하나로 "
-            "충분합니다. 채운 항목은 본문에 반드시 들어가고, 비워둔 항목은 AI가 "
-            "지어내지 않습니다. 일반 글이면 전부 비워두세요."
-        )
-        notice_values = {}
-        notice_cols = st.columns(2)
-        for idx, (fkey, flabel, fplaceholder) in enumerate(notice.FIELDS):
-            notice_values[fkey] = notice_cols[idx % 2].text_input(
-                flabel,
-                value=saved_notice.get(fkey) or "",
-                placeholder=fplaceholder,
-                key=f"notice_{fkey}_{selected_id}",
+        saved = campaign.get(column) or {}
+        filled_n = len(factsheet.clean(sheet, saved))
+        with st.expander(
+            sheet.title + (f" ({filled_n}개 입력됨)" if filled_n else ""),
+            expanded=bool(filled_n),
+        ):
+            st.caption(
+                sheet.hint
+                + " 채운 항목은 본문에 반드시 들어가고, 비워둔 항목은 AI가 지어내지 "
+                "않습니다. 해당 없으면 전부 비워두세요."
             )
+            values = {}
+            cols = st.columns(2)
+            for idx, (fkey, flabel, fplaceholder) in enumerate(sheet.fields):
+                values[fkey] = cols[idx % 2].text_input(
+                    flabel,
+                    value=saved.get(fkey) or "",
+                    placeholder=fplaceholder,
+                    key=f"{sheet.key}_{fkey}_{selected_id}",
+                )
+            sheet_values[column] = factsheet.clean(sheet, values)
 
     st.markdown("##### 🎚️ 콘텐츠 모드")
     brand_default = content_mode.resolve(None, brand_kit)
@@ -270,7 +275,7 @@ with editor_col:
     if save_col.button("💾 저장", width='stretch'):
         repo.update_campaign(
             selected_id, title=title.strip() or None, memo=memo, content_mode=chosen_mode,
-            notice_fields=notice.clean(notice_values),
+            **sheet_values,
         )
         st.toast("저장했습니다.")
 
@@ -278,7 +283,7 @@ with editor_col:
     if gen_col.button("🪄 초안 생성", type="primary", width='stretch', disabled=not can_generate):
         repo.update_campaign(
             selected_id, title=title.strip() or None, memo=memo, content_mode=chosen_mode,
-            notice_fields=notice.clean(notice_values),
+            **sheet_values,
         )
         with st.status("초안을 만드는 중…", expanded=True) as status_box:
             try:
@@ -485,13 +490,14 @@ with editor_col:
         # 리포트 expander 바깥에 둡니다. 밀도나 금기어와 달리 자동으로 되돌릴 수
         # 없고(날짜·금액을 LLM이 다시 쓰게 두지 않습니다), 이대로 발행하면 독자가
         # 신청할 방법이 없는 글이 나갑니다 — 접힌 패널 안에 둘 경고가 아닙니다.
-        notice_report = (report or {}).get("notice") or {}
-        if notice_report.get("checked") and notice_report.get("missing_labels"):
-            st.warning(
-                "📣 공지 정보 누락 — **"
-                + ", ".join(notice_report["missing_labels"])
-                + "** 이(가) 본문에 반영되지 않았습니다. 아래 본문에서 직접 넣고 저장하세요."
-            )
+        for key, sheet in (("notice", factsheet.NOTICE), ("product", factsheet.PRODUCT)):
+            section = (report or {}).get(key) or {}
+            if section.get("checked") and section.get("missing_labels"):
+                st.warning(
+                    f"{sheet.title} 누락 — **"
+                    + ", ".join(section["missing_labels"])
+                    + "** 이(가) 본문에 반영되지 않았습니다. 아래 본문에서 직접 넣고 저장하세요."
+                )
 
         if report:
             with st.expander("🛡️ 컴플라이언스 / SEO 리포트"):
@@ -641,7 +647,26 @@ with editor_col:
                             "🔁 종합 판정: 다시 생성을 고려하세요 — " + " / ".join(recommendation["reasons"])
                         )
                     else:
-                        st.info("📝 종합 판정: 본문은 게시해도 좋습니다. 다만 설정 조정이 필요합니다.")
+                        st.info(
+                            "📝 종합 판정: 본문 자체는 게시해도 좋습니다. "
+                            "다만 아래를 채우면 검색 노출이 달라집니다."
+                        )
+
+                    # 재생성이 아니라 '입력을 채우세요'로 안내합니다 — 없는 가격은
+                    # 다시 생성해도 생기지 않습니다.
+                    if recommendation.get("intent_gap"):
+                        st.caption(
+                            f"🔴 검색 의도 충족도 {recommendation.get('intent_coverage')}% — "
+                            "검색해서 들어온 사람이 답을 찾지 못하고 나가면, 네이버는 그 "
+                            "이탈을 순위에 반영합니다. 아래 항목을 **🛍️ 제품·주문 정보**에 "
+                            "채우고 다시 생성하세요:"
+                        )
+                        for item in recommendation.get("intent_missing") or []:
+                            label = item if isinstance(item, str) else str(item)
+                            st.caption(f"　🔸 {label}")
+
+                    for gap in recommendation.get("fact_gaps") or []:
+                        st.caption(f"📋 입력했지만 본문에 안 들어간 항목 — {gap}")
 
                     if recommendation.get("no_targets"):
                         st.caption(

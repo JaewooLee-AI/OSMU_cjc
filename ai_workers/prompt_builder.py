@@ -145,8 +145,8 @@ def length_block(length_hint: int | None) -> List[str]:
     ]
 
 
-def notice_block(notice_fields: dict | None) -> List[str]:
-    """The announcement's own facts, when the marketer supplied them.
+def notice_block(notice_fields: dict | None, product_fields: dict | None = None) -> List[str]:
+    """이 글이 담아야 할 사실들 — 공지 정보와 제품·주문 정보.
 
     Placed with the source memo rather than in the system prompt: these are
     this post's subject, not standing brand configuration.
@@ -160,42 +160,49 @@ def notice_block(notice_fields: dict | None) -> List[str]:
     방법 nobody asked for, so the absent fields are named and refused
     explicitly rather than just left out.
     """
-    from ai_workers import notice
+    from ai_workers import factsheet
 
-    present = notice.clean(notice_fields)
-    if not present:
-        return []
+    blocks: List[str] = []
+    for sheet, given, headline in (
+        (factsheet.NOTICE, notice_fields, "[공지 정보 — 이 글은 공지 글입니다]"),
+        (factsheet.PRODUCT, product_fields,
+         "[제품·주문 정보 — 사려고 검색해서 들어온 독자가 확인해야 할 것들입니다]"),
+    ):
+        present = factsheet.clean(sheet, given)
+        if not present:
+            continue
 
-    lines = "\n".join(f"- {notice.LABELS[key]}: {value}" for key, value in present.items())
-    absent = [label for key, label in notice.LABELS.items() if key not in present]
+        lines = "\n".join(f"- {sheet.labels[key]}: {value}" for key, value in present.items())
+        absent = [label for key, label in sheet.labels.items() if key not in present]
 
-    block = (
-        "[공지 정보 — 이 글은 공지 글입니다]\n"
-        f"{lines}\n\n"
-        "위 항목은 독자가 이 글을 읽는 이유입니다. **하나도 빠뜨리지 말고, 숫자와 "
-        "날짜를 바꾸지 말고** 본문에 그대로 담으세요. 분위기 묘사로 시작하더라도 "
-        "이 사실들이 본문 안에 분명히 자리 잡아야 합니다."
-    )
-    if absent:
-        block += (
-            "\n\n위에 적히지 않은 항목(" + ", ".join(absent) + ")은 이 공지에 "
-            "해당하지 않거나 아직 정해지지 않은 것입니다. **절대 지어내지 마세요.** "
-            "그럴듯한 날짜·금액·정원을 만들어 넣는 것은 회사가 지키지 못할 약속을 "
-            "발행하는 것과 같습니다. 해당 없는 항목은 아예 언급하지 마세요 — "
-            "연휴 안내에 신청 방법을, 휴무 안내에 정원을 끼워 넣지 마세요. "
-            "독자가 더 알아야 할 것이 있으면 '자세한 내용은 문의해 주세요' 정도로만 "
-            "넘기세요."
+        block = (
+            f"{headline}\n"
+            f"{lines}\n\n"
+            "위 항목은 독자가 이 글을 읽는 이유입니다. **하나도 빠뜨리지 말고, 숫자와 "
+            "날짜를 바꾸지 말고** 본문에 그대로 담으세요. 분위기 묘사로 시작하더라도 "
+            "이 사실들이 본문 안에 분명히 자리 잡아야 합니다."
         )
-    if notice.is_brief(notice_fields):
-        # 분량 목표를 걷어내는 것만으로는 부족합니다. 목표가 없어도 모델은
-        # 블로그 글다운 길이를 맞추려고 브랜드 소개를 끌어옵니다.
-        block += (
-            "\n\n[분량] 이 공지는 알릴 사실이 적습니다. **짧게 쓰세요.** 회사 소개, "
-            "제품 라인업, 수상·인증 이력으로 분량을 늘리지 마세요. 읽는 사람이 알아야 "
-            "할 것은 위 사실과 그에 대한 짧은 안내뿐이고, 그것을 다 전했으면 글은 "
-            "거기서 끝나는 것이 맞습니다."
-        )
-    return [block]
+        if absent:
+            block += (
+                "\n\n위에 적히지 않은 항목(" + ", ".join(absent) + ")은 이 글에 "
+                "해당하지 않거나 아직 정해지지 않은 것입니다. **절대 지어내지 마세요.** "
+                "그럴듯한 날짜·금액·수량·기간을 만들어 넣는 것은 회사가 지키지 못할 약속을 "
+                "발행하는 것과 같습니다. 해당 없는 항목은 아예 언급하지 마세요 — "
+                "연휴 안내에 신청 방법을, 휴무 안내에 정원을 끼워 넣지 마세요. "
+                "독자가 더 알아야 할 것이 있으면 '자세한 내용은 문의해 주세요' 정도로만 "
+                "넘기세요."
+            )
+        if factsheet.is_brief(sheet, given):
+            # 분량 목표를 걷어내는 것만으로는 부족합니다. 목표가 없어도 모델은
+            # 블로그 글다운 길이를 맞추려고 브랜드 소개를 끌어옵니다.
+            block += (
+                "\n\n[분량] 이 글은 알릴 사실이 적습니다. **짧게 쓰세요.** 회사 소개, "
+                "제품 라인업, 수상·인증 이력으로 분량을 늘리지 마세요. 읽는 사람이 알아야 "
+                "할 것은 위 사실과 그에 대한 짧은 안내뿐이고, 그것을 다 전했으면 글은 "
+                "거기서 끝나는 것이 맞습니다."
+            )
+        blocks.append(block)
+    return blocks
 
 
 SUBJECT_INSTRUCTION = (
