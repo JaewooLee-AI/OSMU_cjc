@@ -428,13 +428,20 @@ def run_pipeline(campaign_id: str, progress: Progress = None) -> Dict:
             )
         )
 
+        # 알릴 것이 적은 공지에서는 모드의 분량 목표를 걷어냅니다 —
+        # notice.is_brief 참고. 모드 선택 자체는 건드리지 않습니다: 키워드
+        # 압력은 연휴 공지에도 그대로 적용되어야 합니다.
+        draft_mode = mode
+        if notice.is_brief(notice_fields) and mode.get("length_hint"):
+            draft_mode = {**mode, "length_hint": None}
+
         draft = generate_text(
             vendor=vendor,
             prompt=prompt,
-            system=build_blog_system_prompt(brand_kit, mode),
+            system=build_blog_system_prompt(brand_kit, draft_mode),
             # '내용 우선' asks for a longer piece, so the ceiling has to move
             # with it — Korean runs ~2 characters per token.
-            max_tokens=max(2500, int((mode.get("length_hint") or 0) / 2) + 1200),
+            max_tokens=max(2500, int((draft_mode.get("length_hint") or 0) / 2) + 1200),
             note=f"blog-draft:{mode['key']}",
         )
 

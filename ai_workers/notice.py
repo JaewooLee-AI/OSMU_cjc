@@ -58,6 +58,9 @@ LABELS: Dict[str, str] = {key: label for key, label, _ in FIELDS}
 # 공지 항목이 본문에 살아남았다고 볼 토큰 일치 비율 — coverage() 참고.
 MATCH_RATIO = 0.6
 
+# 이 개수 미만이면 '알릴 것이 적은 공지'로 봅니다 — is_brief() 참고.
+BRIEF_FIELD_COUNT = 4
+
 
 def clean(fields: Dict[str, str] | None) -> Dict[str, str]:
     """Drops blanks and unknown keys, preserving FIELDS order."""
@@ -74,6 +77,27 @@ def is_notice(fields: Dict[str, str] | None) -> bool:
     """A campaign is a 공지 because someone filled the 공지 fields in, not
     because of a separate type flag — one less thing to keep in sync."""
     return bool(clean(fields))
+
+
+def is_brief(fields: Dict[str, str] | None) -> bool:
+    """Has this 공지 too little to say to justify a length target?
+
+    '내용 우선' asks for 1500자. That is right for a 모집 공고 carrying nine
+    facts and wrong for a 연휴 안내 carrying one: the first 추석 연휴 안내
+    generated this way came out at 848자, of which the actual announcement
+    was three sentences and the rest was 한복 새활용 소개 and the 2023·2024
+    육성지원사업 선정 이력 — the same brand-padding failure that the notice
+    fields were introduced to fix, reappearing from the other direction.
+
+    A 연휴·휴무 안내 carries one to three fields (일시, 가끔 장소나 문의);
+    a 모집·행사 공고 carries five or more. BRIEF_FIELD_COUNT sits in that gap.
+    It is a threshold, so it will occasionally be wrong — a four-field 공지
+    that wants to be short still gets a length target — but the marketer can
+    switch modes for that post, and the cost of the other error (a two-line
+    notice inflated to 1500자 of brand copy) is the one that actually gets
+    published.
+    """
+    return 0 < len(clean(fields)) < BRIEF_FIELD_COUNT
 
 
 def coverage(content: str, fields: Dict[str, str] | None) -> Dict[str, object]:
