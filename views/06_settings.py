@@ -308,6 +308,39 @@ with tab_naver:
         st.caption("먼저 위에서 키를 등록하세요.")
     else:
         st.caption(f"대상 {len(pool)}개: {', '.join(pool)}")
+
+        # 생성 시점에 실제로 읽히는 숫자는 이 풀의 경쟁도뿐이고, 만료되면
+        # 전환 가중치가 조용히 꺼집니다 — keyword_research.pool_freshness 참고.
+        freshness = keyword_research.pool_freshness(pool)
+        if freshness["stale"]:
+            st.error(
+                f"📉 **경쟁도 만료 {len(freshness['stale'])}개** — "
+                f"{', '.join(freshness['stale'][:8])}"
+                + ("…" if len(freshness["stale"]) > 8 else "")
+                + "  \n지금 초안을 만들면 이 키워드들은 전환 가중치 없이 "
+                "'초안에 몇 번 나왔는지'로만 순위가 매겨집니다."
+            )
+        elif freshness["days_left"] is not None:
+            st.info(
+                f"📈 경쟁도 측정 최고령 {freshness['oldest_document_age']:.0f}일 · "
+                f"**{freshness['days_left']:.0f}일 후 만료** "
+                f"(경쟁도 유효기간 {keyword_research.DOCUMENT_CACHE_DAYS}일)"
+            )
+
+        need = len(freshness["stale"]) or len(pool)
+        if st.button(f"🔄 풀 경쟁도 재측정 ({need}회 호출)", key="pool_refresh"):
+            try:
+                with st.spinner(f"{len(pool)}개 재측정 중…"):
+                    result = keyword_research.refresh_pool(pool)
+            except keyword_research.NaverApiError as exc:
+                st.error(f"❌ {exc}")
+            else:
+                st.success(
+                    f"{result['refreshed']}개 재측정 완료. "
+                    f"앞으로 {keyword_research.DOCUMENT_CACHE_DAYS}일간 유효합니다."
+                )
+                st.rerun()
+
         if st.button("키워드 진단 실행", key="naver_rank"):
             try:
                 with st.spinner("조회 중… (캐시된 키워드는 호출하지 않습니다)"):

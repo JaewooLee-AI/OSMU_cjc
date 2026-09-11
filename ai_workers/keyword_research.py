@@ -468,6 +468,61 @@ DEFAULT_MIN_VOLUME = 200
 DEFAULT_MAX_VOLUME = 30_000
 
 
+def pool_freshness(keywords: List[str]) -> dict:
+    """Whether the numbers behind keyword targeting are still alive.
+
+    `seo_optimizer._opportunity` reads competition from cache and returns 0
+    the moment it expires, which silently reverts target selection to "which
+    keyword did the draft happen to repeat most" — the exact behaviour the
+    conversion weights were introduced to replace. Nothing in the app said so.
+    The Settings screen reported "캐시된 키워드 7,967 · 재조회 시 호출 0" as a
+    plain win while the 16 numbers that actually matter were days from
+    expiring.
+
+    Only the pool is checked. A sweep measures hundreds of candidates, but
+    generation reads none of them: a stale 간호사릴홀더 costs nothing, a stale
+    결혼답례품 turns the weights off.
+    """
+    rows = []
+    for kw in keywords:
+        rows.append({
+            "keyword": kw,
+            "volume_age": repo.cached_metric_age_days(normalize(kw), "ad_volume"),
+            "document_age": repo.cached_metric_age_days(kw, "blog_total"),
+        })
+
+    def expired(row) -> bool:
+        return (
+            row["volume_age"] is None or row["volume_age"] > VOLUME_CACHE_DAYS
+            or row["document_age"] is None or row["document_age"] > DOCUMENT_CACHE_DAYS
+        )
+
+    stale = [r["keyword"] for r in rows if expired(r)]
+    ages = [r["document_age"] for r in rows if r["document_age"] is not None]
+    oldest = max(ages) if ages else None
+    return {
+        "rows": rows,
+        "stale": stale,
+        "measured": len(ages),
+        "total": len(keywords),
+        "oldest_document_age": oldest,
+        # 가장 오래된 항목이 만료되기까지 남은 일수. 음수면 이미 만료됐습니다.
+        "days_left": (DOCUMENT_CACHE_DAYS - oldest) if oldest is not None else None,
+    }
+
+
+def refresh_pool(keywords: List[str]) -> dict:
+    """Re-measure competition for the pool. One metered request per keyword.
+
+    Deliberately not automatic. Generation must never make a metered call
+    (see `seo_optimizer._opportunity`), and a background refresher would spend
+    the daily quota on a schedule nobody is watching. This is the button that
+    the freshness warning points at.
+    """
+    ranked = rank_keywords(keywords, use_cache=False, include_trend=False)
+    return {"refreshed": len(ranked), "rows": ranked}
+
+
 def sweep_candidates(
     seeds: List[str], *, min_volume: int = DEFAULT_MIN_VOLUME, max_volume: int = DEFAULT_MAX_VOLUME
 ) -> List[dict]:

@@ -386,6 +386,26 @@ def get_cached_metric(keyword: str, metric: str, max_age_days: int) -> Optional[
     return row["value"] if row else None
 
 
+def cached_metric_age_days(keyword: str, metric: str) -> Optional[float]:
+    """How old the cached value is, in days, or None if it was never fetched.
+
+    `get_cached_metric` deliberately can't answer this: it returns None for
+    "absent" and "stale" alike, which is right for a reader that just wants a
+    usable number but useless for telling the marketer *why* scoring stopped
+    working. Expiry is silent everywhere else in this pipeline, and silence is
+    exactly the failure mode — see keyword_research.pool_freshness.
+    """
+    with get_conn() as conn:
+        row = conn.execute(
+            """
+            select (julianday('now') - julianday(fetched_at)) as age
+            from keyword_cache where keyword = ? and metric = ?
+            """,
+            (keyword, metric),
+        ).fetchone()
+    return float(row["age"]) if row and row["age"] is not None else None
+
+
 def put_cached_metric(keyword: str, metric: str, value: str) -> None:
     with get_conn() as conn:
         conn.execute(

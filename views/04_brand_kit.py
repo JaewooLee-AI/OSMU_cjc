@@ -14,7 +14,7 @@ from __future__ import annotations
 import pandas as pd
 import streamlit as st
 
-from ai_workers import content_mode
+from ai_workers import content_mode, keyword_research
 from core import brand_seed, repo
 from core.theme import palette_html
 
@@ -166,6 +166,24 @@ with st.form("brand_kit_form"):
         "⚖️ 컴플라이언스 검수가 제거하는 표현(예: '친환경 ○○')은 키워드로 두면 밀도를 "
         "영원히 채우지 못합니다. 리포트에 그런 키워드가 표시되면 '새활용' 계열로 바꾸세요."
     )
+
+    # 만료는 조용히 일어나고, 조용히 가중치 체계를 끕니다 —
+    # keyword_research.pool_freshness 참고.
+    freshness = keyword_research.pool_freshness(existing.get("seo_keywords") or [])
+    if freshness["stale"]:
+        st.error(
+            f"📉 경쟁도 측정이 만료된 키워드 {len(freshness['stale'])}개: "
+            f"{', '.join(freshness['stale'][:6])}"
+            + ("…" if len(freshness["stale"]) > 6 else "")
+            + "  \n만료된 키워드는 **전환 가중치가 적용되지 않고**, 초안에 몇 번 나왔는지로만 "
+            "순위가 정해집니다. ⚙️ 설정 페이지에서 재측정하세요."
+        )
+    elif freshness["days_left"] is not None:
+        st.caption(
+            f"📈 경쟁도 측정: 가장 오래된 것이 {freshness['oldest_document_age']:.0f}일 전 · "
+            f"**{freshness['days_left']:.0f}일 후 만료**됩니다. 만료되면 전환 가중치가 "
+            "조용히 꺼지므로, 그 전에 ⚙️ 설정에서 재측정하세요."
+        )
 
     st.divider()
     st.markdown("#### 🚫 금기어 치환 사전 (그린워싱 방지)")
