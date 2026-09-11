@@ -183,7 +183,9 @@ with tab_naver:
         m3.markdown(stat_card("캐시된 키워드", f"{repo.keyword_cache_size():,}", "재조회 시 호출 0"),
                     unsafe_allow_html=True)
 
-    b1, b2, b3 = st.columns([2, 1, 1])
+    # 캐시 비우기는 여기 있었는데, 옆에 '누르지 마세요'라고 써 두어야 하는
+    # 버튼이었습니다. 키워드 갱신의 고급 설정으로 옮겼습니다.
+    b1, b3 = st.columns([3, 1])
     if b1.button("연결 테스트 · 저장", key="naver_test", type="primary"):
         # Same "blank means keep" contract as the LLM cards above.
         id_to_test = nv_id or (decrypt_api_key(naver_saved["encrypted_client_id"]) if naver_saved else "")
@@ -203,8 +205,6 @@ with tab_naver:
                 ok, message = keyword_research.test_connection(id_to_test, sec_to_test)
             st.success(f"✅ {message}") if ok else st.error(f"❌ {message}")
 
-    if b2.button("🧹 캐시 비우기", key="naver_cache_clear"):
-        st.info(f"{repo.clear_keyword_cache()}건을 삭제했습니다. 다음 조회는 실제 호출을 씁니다.")
     if naver_saved and b3.button("🗑️ 키 삭제", key="naver_delete"):
         repo.delete_naver_api_settings()
         st.rerun()
