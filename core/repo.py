@@ -386,6 +386,41 @@ def get_cached_metric(keyword: str, metric: str, max_age_days: int) -> Optional[
     return row["value"] if row else None
 
 
+def get_app_state(key: str, default: Any = None) -> Any:
+    """JSON blob parked by a multi-step screen — see the app_state DDL."""
+    with get_conn() as conn:
+        row = conn.execute("select value from app_state where key = ?", (key,)).fetchone()
+    if not row:
+        return default
+    return loads(row["value"], default)
+
+
+def set_app_state(key: str, value: Any) -> None:
+    with get_conn() as conn:
+        conn.execute(
+            """
+            insert into app_state (key, value) values (?, ?)
+            on conflict(key) do update set value = excluded.value,
+                                           updated_at = datetime('now')
+            """,
+            (key, dumps(value)),
+        )
+
+
+def clear_app_state(key: str) -> None:
+    with get_conn() as conn:
+        conn.execute("delete from app_state where key = ?", (key,))
+
+
+def app_state_age_days(key: str) -> Optional[float]:
+    with get_conn() as conn:
+        row = conn.execute(
+            "select (julianday('now') - julianday(updated_at)) as age from app_state where key = ?",
+            (key,),
+        ).fetchone()
+    return float(row["age"]) if row and row["age"] is not None else None
+
+
 def cached_metric_age_days(keyword: str, metric: str) -> Optional[float]:
     """How old the cached value is, in days, or None if it was never fetched.
 

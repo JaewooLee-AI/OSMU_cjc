@@ -53,10 +53,22 @@ TREND_GROUP_LIMIT = 5
 # A blog corpus in the millions moves by fractions of a percent per day, and
 # search interest by month, so both tolerate a long cache. These numbers are
 # the main lever on quota spend — shorten them only with a reason.
-DOCUMENT_CACHE_DAYS = 7
+#
+# Both were shorter (7 and 14) and had to match the operating rhythm instead.
+# The Settings screen tells the marketer to run the diagnosis monthly and the
+# sweep quarterly, but competition expired after a week — and expiry is not
+# inert: `seo_optimizer._opportunity` returns 0 for an unmeasured keyword, so
+# target selection silently reverted to "whichever keyword the draft repeated
+# most" for three weeks out of every four. The conversion weights were off
+# most of the time they were supposed to be working.
+#
+# 30 days is the documented cadence. A blog document count that drifts 1~2%
+# in that window changes no ranking decision; a scoring system that switches
+# itself off changes every one of them.
+DOCUMENT_CACHE_DAYS = 30
 DEMAND_CACHE_DAYS = 3
 # Monthly volume is a monthly aggregate; re-asking daily cannot change it.
-VOLUME_CACHE_DAYS = 14
+VOLUME_CACHE_DAYS = 30
 
 _TIMEOUT = 10
 
@@ -506,6 +518,9 @@ def pool_freshness(keywords: List[str]) -> dict:
         "measured": len(ages),
         "total": len(keywords),
         "oldest_document_age": oldest,
+        # 가장 최근 측정. "언제 마지막으로 손봤더라"에 답하기 위한 값이라
+        # 별도 기록 테이블을 두지 않고 캐시에서 그대로 읽습니다.
+        "newest_document_age": min(ages) if ages else None,
         # 가장 오래된 항목이 만료되기까지 남은 일수. 음수면 이미 만료됐습니다.
         "days_left": (DOCUMENT_CACHE_DAYS - oldest) if oldest is not None else None,
     }

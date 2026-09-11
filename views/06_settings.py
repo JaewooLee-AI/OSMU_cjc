@@ -265,113 +265,89 @@ with tab_naver:
     if ad_saved and d2.button("🗑️ 키 삭제", key="ad_delete"):
         repo.delete_searchad_settings()
         st.rerun()
-
     st.divider()
-    st.subheader("사용 순서")
-    st.info(
-        """
-**SEO 키워드를 바꾸는 것은 아래 ③ 하나뿐입니다.** ①과 ②는 보기만 하고 아무것도 바꾸지 않습니다.
-
-| | 무엇을 하나 | 브랜드 킷이 바뀌나 | 주기 | 비용 |
-|---|---|---|---|---|
-| ① 키워드 진단 | 지금 키워드가 얼마나 좋은지 **측정** | ❌ | 월 1회 | 유료(캐시됨) |
-| ② 연관키워드 찾기 | 파생 검색어 **구경** | ❌ | 수시 | **무료** |
-| ③ 기회 키워드 스윕 | 새 키워드 찾아 **갱신 제안 → 승인** | ✅ **승인 시** | 분기 1회 | 유료 |
-
-**매달 자동으로 바뀌지 않습니다.** ③의 마지막에 나오는 [✅ 적용]을 누르셔야 반영됩니다.
-
-캐시가 비용을 막아줍니다 — 문서 수 7일, 검색량 14일, 트렌드 3일 이내 재조회는 호출이 나가지 않습니다.
-**[캐시 비우기]는 누르지 마세요.**
-        """
-    )
-
-    # The text box's own key is the single source of truth for the seeds:
-    # keeping a parallel copy and passing it as `value=` would not survive
-    # the 🪄 button, because Streamlit gives a keyed widget's stored state
-    # priority over `value` on rerun and the suggestion would be discarded.
-    if "kw_seed_box" not in st.session_state:
-        st.session_state["kw_seed_box"] = ""
-
-    st.divider()
-    st.subheader("① 키워드 진단")
+    # ================================================================
+    # 월간 키워드 갱신 — 한 흐름
+    # ================================================================
+    # 이전에는 ①진단 / ②연관키워드 / ③스윕이 각각 독립 버튼이었고, 어느 것이
+    # 브랜드 킷을 바꾸는지, 어떤 주기로 돌려야 하는지를 사용자가 표를 읽고
+    # 지켜야 했습니다. 실제로는 ③만이 브랜드 킷을 바꾸고, ②는 ③의 1단계와
+    # 같은 호출이며, ①은 ③이 어차피 다시 재는 값을 보여줄 뿐입니다.
+    #
+    # 셋을 한 줄기로 묶고 끝에서 경쟁도 캐시까지 채웁니다. "월 1회 이걸 끝까지
+    # 하면 된다"가 실제로 성립해야, 4주 중 3주를 만료된 숫자로 글 쓰는 일이
+    # 생기지 않습니다 — keyword_research.DOCUMENT_CACHE_DAYS 주석 참고.
+    st.subheader("🔑 키워드 갱신")
     st.caption(
-        "브랜드 키트의 SEO 키워드를 **수요 ÷ 경쟁(블로그 문서 수)** 으로 줄 세웁니다. "
-        "여기서는 아무것도 바뀌지 않습니다. "
-        + ("수요는 검색광고 API의 **절대 월간 검색량**입니다."
-           if ad_saved else
-           "검색광고 키가 없어 수요는 검색어트렌드 **상대값**으로 계산됩니다 (순위 비교용).")
+        "**SEO 키워드를 바꾸는 곳은 여기 하나뿐입니다.** 승인하기 전에는 아무것도 바뀌지 않습니다."
     )
+
     pool = repo.get_brand_kit().get("seo_keywords") or []
-    if not pool:
-        st.caption("브랜드 키트에 SEO 키워드가 없습니다.")
-    elif not naver_saved:
-        st.caption("먼저 위에서 키를 등록하세요.")
+    freshness = keyword_research.pool_freshness(pool) if pool else None
+
+    if not naver_saved or not ad_saved:
+        st.warning("위에서 **두 API 키를 모두 등록**해야 키워드 갱신을 할 수 있습니다.", icon="🔑")
     else:
-        st.caption(f"대상 {len(pool)}개: {', '.join(pool)}")
-
-        # 생성 시점에 실제로 읽히는 숫자는 이 풀의 경쟁도뿐이고, 만료되면
-        # 전환 가중치가 조용히 꺼집니다 — keyword_research.pool_freshness 참고.
-        freshness = keyword_research.pool_freshness(pool)
-        if freshness["stale"]:
+        # --- 지금 상태 한 줄 ------------------------------------------------
+        if not pool:
+            st.info("브랜드 킷에 SEO 키워드가 없습니다. 아래 갱신을 한 번 돌리면 채워집니다.")
+        elif freshness["stale"]:
             st.error(
-                f"📉 **경쟁도 만료 {len(freshness['stale'])}개** — "
-                f"{', '.join(freshness['stale'][:8])}"
-                + ("…" if len(freshness["stale"]) > 8 else "")
-                + "  \n지금 초안을 만들면 이 키워드들은 전환 가중치 없이 "
-                "'초안에 몇 번 나왔는지'로만 순위가 매겨집니다."
+                f"📉 **경쟁도 만료 {len(freshness['stale'])}/{len(pool)}개** — 지금 만드는 초안은 "
+                "전환 가중치 없이 '초안에 몇 번 나왔는지'로만 키워드를 고릅니다. "
+                "아래 [숫자만 새로 재기]를 눌러주세요."
             )
-        elif freshness["days_left"] is not None:
-            st.info(
-                f"📈 경쟁도 측정 최고령 {freshness['oldest_document_age']:.0f}일 · "
-                f"**{freshness['days_left']:.0f}일 후 만료** "
-                f"(경쟁도 유효기간 {keyword_research.DOCUMENT_CACHE_DAYS}일)"
+        else:
+            st.success(
+                f"✅ 키워드 {len(pool)}개 모두 측정돼 있습니다 · 마지막 측정 "
+                f"{freshness['newest_document_age']:.0f}일 전 · "
+                f"**{freshness['days_left']:.0f}일 후 만료**",
+                icon="✅",
             )
 
-        need = len(freshness["stale"]) or len(pool)
-        if st.button(f"🔄 풀 경쟁도 재측정 ({need}회 호출)", key="pool_refresh"):
-            try:
-                with st.spinner(f"{len(pool)}개 재측정 중…"):
-                    result = keyword_research.refresh_pool(pool)
-            except keyword_research.NaverApiError as exc:
-                st.error(f"❌ {exc}")
-            else:
-                st.success(
-                    f"{result['refreshed']}개 재측정 완료. "
-                    f"앞으로 {keyword_research.DOCUMENT_CACHE_DAYS}일간 유효합니다."
-                )
-                st.rerun()
-
-        if st.button("키워드 진단 실행", key="naver_rank"):
-            try:
-                with st.spinner("조회 중… (캐시된 키워드는 호출하지 않습니다)"):
-                    ranked = keyword_research.rank_keywords(pool)
-            except keyword_research.NaverApiError as exc:
-                st.error(f"❌ {exc}")
-            else:
-                if not ranked:
-                    st.info("결과가 없습니다.")
+        # --- 가벼운 유지: 같은 키워드로 숫자만 새로 --------------------------
+        if pool:
+            need = len(freshness["stale"]) or len(pool)
+            r1, r2 = st.columns([2, 3])
+            if r1.button(f"🔄 숫자만 새로 재기 ({need}회 호출)", key="pool_refresh"):
+                try:
+                    with st.spinner(f"{len(pool)}개 재측정 중…"):
+                        result = keyword_research.refresh_pool(pool)
+                except keyword_research.NaverApiError as exc:
+                    st.error(f"❌ {exc}")
                 else:
-                    df = pd.DataFrame(ranked)[
-                        ["keyword", "estimated_volume", "demand", "documents", "score"]
-                    ]
-                    df.columns = ["키워드", "월간 검색량", "트렌드(상대)", "블로그 문서 수", "점수"]
-                    st.dataframe(df, width='stretch', hide_index=True)
-                    st.caption("점수가 높을수록 '찾는 사람은 많은데 경쟁 글은 적은' 키워드입니다.")
+                    st.success(
+                        f"{result['refreshed']}개 재측정 완료. "
+                        f"{keyword_research.DOCUMENT_CACHE_DAYS}일간 유효합니다."
+                    )
+                    st.rerun()
+            r2.caption(
+                "키워드 목록은 그대로 두고 검색량·경쟁도만 다시 잽니다. "
+                "**평소 달에는 이것만 누르면 됩니다.**"
+            )
 
         st.divider()
-        st.subheader("씨앗 키워드")
+
+        # --- 본 흐름: 새 키워드 찾아 교체 ------------------------------------
+        st.markdown("##### 🔎 새 키워드까지 찾아 교체하기")
         st.caption(
-            "아래 ②·③이 공통으로 쓰는 출발점입니다. **브랜드 키워드를 그대로 쓰면 안 됩니다** — "
-            "검색량이 없는 말에는 연관키워드도 없어서 아무것도 나오지 않습니다. "
-            "네이버에서 실제로 검색되는 일반적인 말이어야 합니다."
+            "분기에 한 번 정도. 연관 검색어를 대량 발굴해 이길 만한 것만 남기고, 브랜드에 맞는지 "
+            "판정한 뒤, 승인하면 브랜드 킷 반영과 측정까지 한 번에 끝냅니다."
         )
-        z1, z2 = st.columns([3, 1])
+
+        # The text box's own key is the single source of truth for the seeds:
+        # keeping a parallel copy and passing it as `value=` would not survive
+        # the 🪄 button, because Streamlit gives a keyed widget's stored state
+        # priority over `value` on rerun and the suggestion would be discarded.
+        if "kw_seed_box" not in st.session_state:
+            st.session_state["kw_seed_box"] = ""
+
         def _fill_seeds() -> None:
             """Overwrites the seed box from the brand kit.
 
             Runs as an on_click callback rather than inline after the button,
             because assigning to a widget's own key is only legal before that
-            widget is instantiated for the run — and the text input above has
+            widget is instantiated for the run — and the text input below has
             already been created by the time an inline handler would fire.
             Callbacks execute ahead of the rerun, so this is the one place the
             box can be set programmatically.
@@ -383,153 +359,140 @@ with tab_naver:
             else:
                 st.session_state["kw_seed_error"] = "추천에 실패했습니다. 직접 입력해주세요."
 
-        seed = z1.text_input("씨앗 키워드 (쉼표로 최대 5개)", key="kw_seed_box")
+        z1, z2 = st.columns([3, 1])
+        seed = z1.text_input(
+            "씨앗 키워드 (쉼표로 최대 5개)",
+            key="kw_seed_box",
+            help="브랜드 이름이 아니라 네이버에서 실제로 검색되는 일반적인 말이어야 합니다. "
+                 "'더봄봄'처럼 검색량이 없는 말에는 연관키워드가 없습니다.",
+        )
         with z2:
             st.write("")
             st.button("🪄 브랜드에서 추천", key="kw_suggest", on_click=_fill_seeds)
         if st.session_state.get("kw_seed_error"):
             st.error(st.session_state["kw_seed_error"])
 
-        st.divider()
-        st.subheader("② 연관키워드 찾기")
-        st.caption("검색광고 API가 파생되는 실제 검색어를 찾아옵니다. **무료**이고, 보기만 합니다.")
-        floor = st.number_input("최소 검색량", min_value=0, step=50, value=100, key="ad_floor")
-        if st.button("연관키워드 찾기", key="ad_discover"):
-            if not ad_saved:
-                st.error("검색광고 API 키를 먼저 등록하세요.")
+        SWEEP_STATE = "sweep"
+        saved_sweep = repo.get_app_state(SWEEP_STATE) or {}
+        stage = saved_sweep.get("stage", 0)
+        state_age = repo.app_state_age_days(SWEEP_STATE)
+        if stage and state_age is not None and state_age > 0.02:
+            st.caption(
+                f"↩️ 진행 중이던 작업을 이어서 표시합니다 ({state_age * 24:.0f}시간 전 중단). "
+                "유료로 조사한 결과는 새로고침해도 남습니다."
+            )
+
+        steps = ["1. 후보 찾기", "2. 경쟁도 조사", "3. 브랜드 판정", "4. 적용"]
+        st.markdown(
+            " ".join(
+                f"<span style='padding:2px 10px;border-radius:10px;font-size:.82rem;"
+                f"background:{'#A6224B' if i < stage else '#EDE6DD'};"
+                f"color:{'#fff' if i < stage else '#8A7B6B'}'>{s}</span>"
+                for i, s in enumerate(steps)
+            ),
+            unsafe_allow_html=True,
+        )
+        st.write("")
+
+        with st.expander("⚙️ 고급 설정 (건드리지 않아도 됩니다)"):
+            # 세 값 모두 기본값이 곧 권장값입니다. 사용자가 답할 근거가 없는
+            # 질문을 첫 화면에 놓지 않기 위해 여기로 내렸습니다.
+            g1, g2 = st.columns(2)
+            vol_min = g1.number_input(
+                "최소 검색량", min_value=0, step=50,
+                value=keyword_research.DEFAULT_MIN_VOLUME, key="sw_min_v3",
+                help="이보다 적으면 1위를 해도 유입이 없습니다.",
+            )
+            vol_max = g2.number_input(
+                "최대 검색량", min_value=100, step=500,
+                value=keyword_research.DEFAULT_MAX_VOLUME, key="sw_max_v3",
+                help="이보다 크면 대형 쇼핑몰·언론사와 경쟁하게 됩니다.",
+            )
+            cap_n = st.slider(
+                "조사할 후보 수 (= 최대 유료 호출 수)", 10, 200, 100, step=10, key="sw_cap_v2",
+                help="넓게 조사할수록 경쟁이 낮은 키워드를 찾을 확률이 올라갑니다.",
+            )
+            st.caption(f"오늘 남은 호출 {keyword_research.remaining_calls_today():,}회")
+            if st.button("🧹 키워드 캐시 비우기", key="naver_cache_clear"):
+                st.info(
+                    f"{repo.clear_keyword_cache()}건을 삭제했습니다. 다음 조회는 전부 실제 "
+                    "호출을 씁니다 — 평소에는 누를 일이 없습니다."
+                )
+            if stage and st.button("↩️ 진행 중인 작업 버리기", key="sw_reset"):
+                repo.clear_app_state(SWEEP_STATE)
+                st.rerun()
+
+        # --- 1단계: 후보 찾기 (무료) -----------------------------------------
+        if st.button("🔎 1단계 · 후보 찾기 (무료)", key="sw_find", type="primary"):
+            seeds = [s for s in seed.split(",") if s.strip()]
+            if not seeds:
+                st.error("씨앗 키워드를 채우세요. [🪄 브랜드에서 추천]을 눌러도 됩니다.")
             else:
                 try:
-                    with st.spinner("조회 중…"):
-                        found = keyword_research.discover_keywords(
-                            [s for s in seed.split(",") if s.strip()]
+                    with st.spinner("연관키워드 발굴 중…"):
+                        found = keyword_research.sweep_candidates(
+                            seeds, min_volume=int(vol_min), max_volume=int(vol_max)
                         )
                 except keyword_research.NaverApiError as exc:
                     st.error(f"❌ {exc}")
                 else:
-                    shown = [r for r in found if r["volume"] >= floor][:100]
-                    if len(found) <= len(seed.split(",")):
-                        st.warning(
-                            "씨앗 키워드가 되돌아왔을 뿐 새로운 연관키워드가 없습니다. "
-                            "씨앗 자체에 검색량이 없다는 뜻입니다 — 위 **[🪄 브랜드에서 추천]** 을 "
-                            "눌러 일반 검색어로 바꾸세요.",
-                            icon="🌱",
-                        )
-                    elif not shown:
-                        st.info(
-                            f"연관키워드 {len(found)}개를 찾았지만 모두 최소 검색량({floor:,})보다 "
-                            "적습니다. 값을 낮춰서 다시 보세요."
-                        )
-                    else:
-                        df = pd.DataFrame(shown)[["keyword", "volume", "pc", "mobile", "competition"]]
-                        df.columns = ["키워드", "월간 검색량", "PC", "모바일", "광고 경쟁도"]
-                        st.dataframe(df, width='stretch', hide_index=True)
-                        st.caption(
-                            f"전체 {len(found):,}개 중 {len(shown)}개 표시. "
-                            "네이버 연관키워드는 광고 데이터 기반이라 업종과 무관한 단어가 섞입니다 — "
-                            "아래 스윕으로 걸러내세요."
-                        )
+                    repo.set_app_state(SWEEP_STATE, {"stage": 1, "candidates": found})
+                    st.rerun()
 
-        st.divider()
-        st.subheader("③ 기회 키워드 스윕 → SEO 키워드 갱신")
-        st.caption(
-            "**브랜드 킷을 실제로 바꾸는 유일한 흐름입니다.** 연관키워드를 대량 발굴해 "
-            "이길 수 있는 검색량 대역만 남기고, 경쟁 문서 수를 조회한 뒤, "
-            "브랜드에 맞는 것만 골라 갱신을 제안합니다. 위 씨앗 키워드를 그대로 씁니다."
-        )
-        sweep_seed = seed
-        w2, w3 = st.columns(2)
-        # The `_v2` suffix is load-bearing. Streamlit gives a keyed widget's
-        # stored session value priority over `value=`, so raising
-        # DEFAULT_MAX_VOLUME from 5,000 to 30,000 left every existing session
-        # pinned to the old ceiling — which silently kept cutting the best
-        # candidates (결혼답례품 at 19,620) while the code claimed otherwise.
-        # A key that has never been seen has no stored value to win.
-        vol_min = w2.number_input(
-            "최소 검색량", min_value=0, step=50,
-            value=keyword_research.DEFAULT_MIN_VOLUME, key="sw_min_v2",
-            help="이보다 적으면 1위를 해도 유입이 없습니다.",
-        )
-        vol_max = w3.number_input(
-            "최대 검색량", min_value=100, step=500,
-            value=keyword_research.DEFAULT_MAX_VOLUME, key="sw_max_v2",
-            help="이보다 크면 대형 쇼핑몰·언론사와 경쟁하게 됩니다.",
-        )
-        cap_n = st.slider("조사할 후보 수 (= 최대 유료 호출 수)", 10, 100, 40, step=10, key="sw_cap")
-
-        # Discovery is free, scoring is not — so the candidate list is fetched
-        # and parked in session state first, and the metered pass only runs
-        # after the user has seen the actual number of requests it will cost.
-        if st.button("1단계 · 후보 찾기 (무료)", key="sw_find"):
-            if not ad_saved:
-                st.error("검색광고 API 키를 먼저 등록하세요.")
-            else:
-                try:
-                    with st.spinner("연관키워드 발굴 중…"):
-                        st.session_state["sw_candidates"] = keyword_research.sweep_candidates(
-                            [s for s in sweep_seed.split(",") if s.strip()],
-                            min_volume=int(vol_min), max_volume=int(vol_max),
-                        )
-                except keyword_research.NaverApiError as exc:
-                    st.error(f"❌ {exc}")
-
-        candidates = st.session_state.get("sw_candidates")
-        if candidates is not None:
+        candidates = saved_sweep.get("candidates")
+        if stage >= 1 and candidates is not None:
             if not candidates:
                 st.info(
-                    f"검색량 {vol_min:,}~{vol_max:,} 구간에 후보가 없습니다. "
-                    "씨앗을 더 일반적인 검색어로 바꾸거나 구간을 넓혀보세요."
+                    "설정한 검색량 구간에 후보가 없습니다. 씨앗을 더 일반적인 검색어로 바꿔보세요."
                 )
             else:
-                cost = keyword_research.estimate_sweep_cost(candidates, limit=int(cap_n))
-                # A thin candidate list means the seeds were too narrow, and
-                # paying to score it would lock in a pool built from whatever
-                # little came back. Cheaper to say so before step 2 than to
-                # let the user apply a worse list than they already have.
                 if len(candidates) < 150:
                     st.warning(
-                        f"후보가 {len(candidates)}개뿐입니다. 씨앗 키워드에 수식어가 붙어 "
-                        "범위가 좁아졌을 가능성이 큽니다 — '친환경 답례품' 대신 **'답례품'** 처럼 "
-                        "수식어 없는 카테고리 이름으로 바꿔보세요. 보통 300개 이상 나옵니다.",
+                        f"후보가 {len(candidates)}개뿐입니다. 씨앗 키워드에 수식어가 붙어 범위가 "
+                        "좁아졌을 가능성이 큽니다 — '친환경 답례품' 대신 **'답례품'** 처럼 수식어 "
+                        "없는 카테고리 이름으로 바꿔보세요.",
                         icon="🌱",
                     )
+                cost = keyword_research.estimate_sweep_cost(candidates, limit=int(cap_n))
                 st.success(
-                    f"후보 {len(candidates)}개 발견. 상위 {min(len(candidates), int(cap_n))}개를 조사하면 "
-                    f"**유료 호출 {cost}회**를 사용합니다 (오늘 남은 호출 "
-                    f"{keyword_research.remaining_calls_today():,}회)."
+                    f"후보 **{len(candidates)}개** 발견. 상위 {min(len(candidates), int(cap_n))}개를 "
+                    f"조사하면 유료 호출 **{cost}회**를 씁니다 "
+                    f"(오늘 남은 {keyword_research.remaining_calls_today():,}회)."
                 )
-                if st.button(f"2단계 · 경쟁도 조사 실행 ({cost}회 사용)", key="sw_score", type="primary"):
+
+                # --- 2단계: 경쟁도 조사 (유료) --------------------------------
+                if st.button(f"💳 2단계 · 경쟁도 조사 ({cost}회 사용)", key="sw_score", type="primary"):
                     try:
                         with st.spinner("블로그 경쟁 문서 수 조회 중…"):
                             scored = keyword_research.score_candidates(candidates, limit=int(cap_n))
                     except keyword_research.NaverApiError as exc:
                         st.error(f"❌ {exc}")
                     else:
-                        st.session_state["sw_scored"] = scored
-                        df = pd.DataFrame(scored)[
-                            ["keyword", "estimated_volume", "documents", "score"]
-                        ]
-                        df.columns = ["키워드", "월간 검색량", "블로그 문서 수", "점수"]
-                        st.dataframe(df, width='stretch', hide_index=True)
+                        repo.set_app_state(
+                            SWEEP_STATE,
+                            {"stage": 2, "candidates": candidates, "scored": scored},
+                        )
+                        st.rerun()
 
-        # --- 3단계: LLM 큐레이션 → 브랜드 킷 반영 제안 -------------------------
-        scored = st.session_state.get("sw_scored")
-        if scored:
-            st.markdown("**3단계 · 브랜드에 맞는 것만 고르기**")
-            st.caption(
-                "숫자만으로는 `자갈`처럼 업종과 무관한 키워드를 걸러낼 수 없습니다. "
-                "브랜드 킷(업종·핵심 사실)을 근거로 모델이 관련성을 판정하고 검색 의도별로 묶습니다."
-            )
-            if st.button("키워드 갱신 제안 받기", key="cu_propose"):
+        scored = saved_sweep.get("scored")
+        if stage >= 2 and scored:
+            with st.expander(f"조사 결과 {len(scored)}개 보기"):
+                df = pd.DataFrame(scored)[["keyword", "estimated_volume", "documents", "score"]]
+                df.columns = ["키워드", "월간 검색량", "블로그 문서 수", "점수"]
+                st.dataframe(df, width='stretch', hide_index=True)
+
+            # --- 3단계: 브랜드 판정 -------------------------------------------
+            if st.button("🤖 3단계 · 브랜드에 맞는 것만 고르기", key="cu_propose", type="primary"):
                 with st.spinner("브랜드 기준으로 판정 중…"):
-                    st.session_state["cu_proposal"] = keyword_curator.propose(
-                        scored, current=pool
-                    )
+                    result = keyword_curator.propose(scored, current=pool)
+                repo.set_app_state(SWEEP_STATE, {**saved_sweep, "stage": 3, "proposal": result})
+                st.rerun()
 
-            proposal = st.session_state.get("cu_proposal")
-            if proposal and proposal.get("error"):
+        proposal = saved_sweep.get("proposal")
+        if stage >= 3 and proposal:
+            if proposal.get("error"):
                 st.error(f"❌ 판정 실패: {proposal['error']}")
-            elif proposal:
-                st.markdown("##### 🎯 키워드 갱신 제안")
+            else:
                 if proposal.get("focus"):
                     st.success(
                         f"**주력 주제: {' · '.join(proposal['focus'])}** — 네이버 C-Rank는 "
@@ -541,47 +504,109 @@ with tab_naver:
                     rows = proposal["groups"].get(gkey) or []
                     if not rows:
                         continue
-                    st.markdown(f"**[{glabel}]**")
+                    note = (
+                        " · 검색 타깃에서 제외됩니다 (본문에는 등장)"
+                        if gkey == "identity"
+                        else f" · 전환 가중치 {keyword_curator.GROUP_DEFAULT_WEIGHT.get(gkey)} 부여"
+                    )
+                    st.markdown(
+                        f"**[{glabel}]**<span style='opacity:.55'>{note}</span>",
+                        unsafe_allow_html=True,
+                    )
                     for r in rows:
                         mark = "=" if r["keyword"] in proposal["kept"] else "+"
                         vol = f"{r['estimated_volume']:,}" if r.get("estimated_volume") else "—"
-                        ratio = f" · 문서/검색 {r['ratio']:.0f}" if r.get("ratio") else ""
+                        ratio = f" · 경쟁 {r['ratio']:.0f}배" if r.get("ratio") else ""
                         st.markdown(
                             f"<code>{mark}</code> **{r['keyword']}** &nbsp; {vol}{ratio}"
                             f" &nbsp; <span style='opacity:.6'>{r.get('reason','')}</span>",
                             unsafe_allow_html=True,
                         )
 
+                # 제외 목록은 경쟁배수가 낮은 순으로 보여줍니다. 모델이 판정하지
+                # 않은 후보까지 전부 여기 오기 때문에 수십 개가 되는데, 그중
+                # 쓸 만한 것은 '경쟁이 낮은 것'이고 그건 정렬로 위에 올릴 수
+                # 있습니다 — 담당자가 수십 개를 다 읽을 필요가 없어집니다.
                 revived = []
-                if proposal["excluded"]:
-                    with st.expander(f"제외된 키워드 {len(proposal['excluded'])}개 (되살릴 수 있습니다)"):
-                        for i, r in enumerate(proposal["excluded"]):
-                            vol = f"{r['estimated_volume']:,}" if r.get("estimated_volume") else "—"
-                            if st.checkbox(
-                                f"{r['keyword']} — {r.get('reason','')} (검색량 {vol})",
-                                key=f"cu_revive_{i}",
-                            ):
-                                revived.append(r["keyword"])
 
+                def _ratio_of(row):
+                    vol, docs = row.get("estimated_volume"), row.get("documents")
+                    return (docs / vol) if (vol and docs) else None
+
+                excluded = sorted(
+                    proposal["excluded"],
+                    key=lambda r: _ratio_of(r) if _ratio_of(r) is not None else 9e9,
+                )
+                if excluded:
+                    st.markdown("**[제외됨 — 되살릴 수 있습니다]**")
+                    st.caption("경쟁이 낮은 순입니다. 위쪽일수록 이기기 쉬운 키워드입니다.")
+
+                    def _revive_row(row, idx):
+                        vol = f"{row['estimated_volume']:,}" if row.get("estimated_volume") else "—"
+                        ratio = _ratio_of(row)
+                        label = f"{row['keyword']} — 검색 {vol}"
+                        label += f" · 경쟁 {ratio:.0f}배" if ratio is not None else " · 경쟁 미측정"
+                        label += f" · {row.get('reason', '')}"
+                        if st.checkbox(label, key=f"cu_revive_{idx}"):
+                            revived.append(row["keyword"])
+
+                    for i, row in enumerate(excluded[:15]):
+                        _revive_row(row, i)
+                    if len(excluded) > 15:
+                        with st.expander(f"나머지 {len(excluded) - 15}개"):
+                            for i, row in enumerate(excluded[15:], start=15):
+                                _revive_row(row, i)
+
+                # --- 4단계: 적용 + 측정 ---------------------------------------
                 final = proposal["accepted"] + revived
                 st.divider()
-                a1, a2 = st.columns([1, 3])
-                if a1.button("✅ 적용", key="cu_apply", type="primary"):
-                    keyword_curator.apply(final)
-                    st.session_state.pop("cu_proposal", None)
-                    st.success(f"브랜드 킷의 SEO 키워드를 {len(final)}개로 갱신했습니다.")
-                    st.rerun()
-                if a2.button("무시", key="cu_discard"):
-                    st.session_state.pop("cu_proposal", None)
-                    st.rerun()
                 st.caption(
-                    f"적용 시 {len(final)}개 — 유지 {len(proposal['kept'])} · "
+                    f"적용하면 **{len(final)}개** — 유지 {len(proposal['kept'])} · "
                     f"추가 {len(proposal['added'])} · 제거 {len(proposal['removed'])}"
                     + (f" · 되살림 {len(revived)}" if revived else "")
+                    + ". 그룹에 따라 전환 가중치와 검색 타깃 여부가 함께 저장되고, "
+                    "이어서 경쟁도 측정까지 끝납니다."
                 )
-                if proposal["removed"]:
-                    st.caption(f"제거될 키워드: {', '.join(proposal['removed'])}")
+                a1, a2 = st.columns([1, 3])
+                if a1.button("✅ 4단계 · 적용", key="cu_apply", type="primary"):
+                    with st.spinner("브랜드 킷 반영 후 측정 중…"):
+                        applied = keyword_curator.apply_and_measure(final, proposal)
+                    repo.clear_app_state(SWEEP_STATE)
+                    st.success(
+                        f"SEO 키워드 {applied['pool']}개로 갱신하고 측정까지 마쳤습니다 "
+                        f"(추가 호출 {applied['calls']}회). "
+                        f"{keyword_research.DOCUMENT_CACHE_DAYS}일간 유효합니다. "
+                        "가중치는 🧵 브랜드 킷에서 조정할 수 있습니다."
+                    )
+                    st.rerun()
+                if a2.button("무시하고 버리기", key="cu_discard"):
+                    repo.clear_app_state(SWEEP_STATE)
+                    st.rerun()
 
+    st.divider()
+    with st.expander("🔬 지금 키워드가 얼마나 좋은지만 보기 (아무것도 바뀌지 않습니다)"):
+        if not pool:
+            st.caption("브랜드 킷에 SEO 키워드가 없습니다.")
+        elif not naver_saved:
+            st.caption("먼저 위에서 키를 등록하세요.")
+        else:
+            st.caption(f"대상 {len(pool)}개: {', '.join(pool)}")
+            if st.button("키워드 진단 실행", key="naver_rank"):
+                try:
+                    with st.spinner("조회 중… (캐시된 키워드는 호출하지 않습니다)"):
+                        ranked = keyword_research.rank_keywords(pool)
+                except keyword_research.NaverApiError as exc:
+                    st.error(f"❌ {exc}")
+                else:
+                    if not ranked:
+                        st.info("결과가 없습니다.")
+                    else:
+                        df = pd.DataFrame(ranked)[
+                            ["keyword", "estimated_volume", "demand", "documents", "score"]
+                        ]
+                        df.columns = ["키워드", "월간 검색량", "트렌드(상대)", "블로그 문서 수", "점수"]
+                        st.dataframe(df, width='stretch', hide_index=True)
+                        st.caption("점수가 높을수록 '찾는 사람은 많은데 경쟁 글은 적은' 키워드입니다.")
 
 # ------------------------------------------------------------- vision / tokens
 with tab_vision:

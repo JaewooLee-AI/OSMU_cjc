@@ -338,7 +338,77 @@ def suggest_seeds(vendor: Optional[str] = None) -> List[str]:
     return [s.strip() for s in seeds if isinstance(s, str) and s.strip()][:5]
 
 
-def apply(keywords: List[str]) -> None:
+# 그룹이 곧 그 유입의 사업적 가치에 대한 판정입니다. 담당자가 손으로 넣기
+# 전까지의 출발값이고, 한 번 손대면 다시 덮지 않습니다.
+GROUP_DEFAULT_WEIGHT = {
+    "purchase": 2.0,    # 구매 직결 — 이 검색어로 들어오면 살 사람
+    "division": 1.5,    # 사업 부문 — 문의로 이어지는 축
+    "prospect": 1.0,    # 잠재 고객 — 지금 사지는 않음
+    "identity": 1.0,    # 브랜드 정체성 — 아래에서 검색 타깃에서 뺍니다
+}
+
+
+def apply(keywords: List[str], proposal: Optional[dict] = None) -> None:
     """Write the approved list to the brand kit. Deliberately the only
-    function here that mutates anything, and never called by `propose`."""
-    repo.save_brand_kit(seo_keywords=[k for k in dict.fromkeys(keywords) if k.strip()])
+    function here that mutates anything, and never called by `propose`.
+
+    `proposal` carries the group each keyword landed in, and writing it is the
+    point: without it the curation was a one-way loss of everything this
+    module worked out. `identity` is the clearest case — the model correctly
+    labels 더봄봄 and 한복 새활용 as brand vocabulary that draws 15 and 10
+    searches a month, and then the old version of this function threw the
+    label away and let them compete for titles like anything else.
+
+    Weights are seeded per group but **never overwrite a weight the marketer
+    already set**: the group is a starting guess from a model that has not
+    seen a single order, and the human number is the one that knows what a
+    기관 굿즈 enquiry is worth. Only keywords new to the pool get a default.
+
+    Settings for keywords that left the pool are dropped, so a list that has
+    been curated a few times doesn't accumulate weights for words nobody uses.
+    """
+    final = [k for k in dict.fromkeys(keywords) if k.strip()]
+    fields = {"seo_keywords": final}
+
+    if proposal:
+        group_of = {
+            row["keyword"]: gkey
+            for gkey, rows in (proposal.get("groups") or {}).items()
+            for row in rows
+        }
+        existing = repo.get_brand_kit()
+        weights = dict(existing.get("keyword_weights") or {})
+        non_targets = set(existing.get("non_target_keywords") or ())
+
+        for keyword in final:
+            gkey = group_of.get(keyword)
+            if gkey == "identity":
+                non_targets.add(keyword)
+            if keyword not in weights and gkey in GROUP_DEFAULT_WEIGHT:
+                weights[keyword] = GROUP_DEFAULT_WEIGHT[gkey]
+
+        fields["keyword_weights"] = {k: v for k, v in weights.items() if k in final}
+        fields["non_target_keywords"] = [k for k in final if k in non_targets]
+
+    repo.save_brand_kit(**fields)
+
+
+def apply_and_measure(keywords: List[str], proposal: Optional[dict] = None) -> dict:
+    """Apply the pool and leave every keyword in it freshly measured.
+
+    The two used to be separate chores and the second one had no prompt: a
+    curation could hand the brand a pool whose incumbents had not been
+    re-measured in weeks, so `_opportunity` scored them 0 and the weights that
+    were just written did nothing. Anything already cached costs no request,
+    so in practice this is a handful of calls for the keywords that survived
+    the previous pool.
+
+    Returns what it spent so the screen can say so rather than the marketer
+    discovering it in the quota counter.
+    """
+    apply(keywords, proposal)
+    pool = repo.get_brand_kit().get("seo_keywords") or []
+    before = repo.naver_calls_today()
+    # use_cache=True: 방금 조사에서 캐시에 들어간 후보는 다시 사지 않습니다.
+    keyword_research.rank_keywords(pool, use_cache=True, include_trend=False)
+    return {"pool": len(pool), "calls": repo.naver_calls_today() - before}

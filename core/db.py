@@ -197,6 +197,15 @@ create table if not exists searchad_settings (
 -- of a percent per day on a corpus of millions, so a stale-by-a-week answer
 -- is the same answer — caching costs nothing in accuracy and is the main
 -- thing keeping a keyword sweep from burning quota on every rerun.
+-- 여러 단계에 걸치는 화면 작업의 중간 결과. 지금은 키워드 스윕 하나가 씁니다.
+-- st.session_state 에만 두면 브라우저 새로고침 한 번에 사라지는데, 스윕의
+-- 2단계는 유료 호출로 산 결과라 날아가면 다시 사야 합니다.
+create table if not exists app_state (
+    key         text primary key,
+    value       text not null,
+    updated_at  text not null default (datetime('now'))
+);
+
 create table if not exists keyword_cache (
     keyword     text not null,
     metric      text not null,

@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import streamlit as st
 
+from ai_workers import keyword_research
 from ai_workers.news_search import search_news_by_keywords
 from core import repo
 from core.theme import status_chip
@@ -27,12 +28,30 @@ seo_keywords = brand_kit.get("seo_keywords") or []
 if not seo_keywords:
     st.info("브랜드 킷에 SEO 키워드가 없습니다. 아래에 직접 검색어를 입력하거나 먼저 키워드를 등록하세요.")
 
+# 기본 선택은 검색량 상위 3개입니다. 이전에는 풀의 앞 3개를 그대로 썼는데,
+# 그 순서는 큐레이션이 그룹을 이어붙인 결과일 뿐 아무 의미가 없었습니다 —
+# 키워드 풀을 정리하면서 순서를 바꾼 것만으로 뉴스 기본 검색어가 통째로
+# 바뀌는 상태였습니다. 뉴스가 실제로 걸릴 확률은 검색량과 같이 가므로,
+# '노리개키링'(월 1,350회)보다 '결혼답례품'(월 19,620회)이 기본이어야 합니다.
+def _volume_of(keyword: str) -> float:
+    cached = repo.get_cached_metric(
+        keyword_research.normalize(keyword), "ad_volume", keyword_research.VOLUME_CACHE_DAYS
+    )
+    try:
+        return float(cached) if cached is not None else 0.0
+    except (TypeError, ValueError):
+        return 0.0
+
+
+default_keywords = sorted(seo_keywords, key=_volume_of, reverse=True)[:3]
+
 col1, col2 = st.columns([3, 1])
 with col1:
     selected_keywords = st.multiselect(
         "검색 키워드 (브랜드 킷의 SEO 키워드)",
         options=seo_keywords,
-        default=seo_keywords[:3],
+        default=default_keywords,
+        help="검색량이 큰 순으로 3개를 기본 선택했습니다.",
     )
     extra_text = st.text_input(
         "추가 검색어 (쉼표로 구분)",
