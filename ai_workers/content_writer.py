@@ -57,6 +57,7 @@ from ai_workers.seo_optimizer import (
     rebalance_keywords,
     rewrite_title_for_keyword,
     select_target_keywords,
+    title_candidates,
     title_keyword_coverage,
 )
 from ai_workers.shorts_writer import write_shorts_script
@@ -405,7 +406,10 @@ def run_pipeline(campaign_id: str, progress: Progress = None) -> Dict:
             ]
             + (
                 [
-                    _title_generation_instruction(seo_keywords, source_title)
+                    _title_generation_instruction(
+                        title_candidates(seo_keywords, brand_kit.get("keyword_weights")),
+                        source_title,
+                    )
                     + avoidance_instruction(title_history)
                 ]
                 if needs_title
@@ -443,8 +447,13 @@ def run_pipeline(campaign_id: str, progress: Progress = None) -> Dict:
         # themselves is never rewritten out from under them (same rule
         # `rebalance_keywords` already follows for the body-density pass).
         title_missing_keywords: List[str] = []
-        if needs_title and target_keywords and mode["rewrite_title"]:
-            title_missing_keywords = title_keyword_coverage(final_title, target_keywords)
+        # Demoted keywords are targets for the body but never for the title —
+        # see seo_optimizer.title_candidates. Without this the backstop puts
+        # back exactly what the generation instruction was just stopped from
+        # asking for.
+        title_eligible = title_candidates(target_keywords, brand_kit.get("keyword_weights"))
+        if needs_title and title_eligible and mode["rewrite_title"]:
+            title_missing_keywords = title_keyword_coverage(final_title, title_eligible)
             if title_missing_keywords:
                 _report(progress, "제목에 SEO 키워드 보강 중…")
                 # History is passed so the candidate scorer can reject a
@@ -467,12 +476,15 @@ def run_pipeline(campaign_id: str, progress: Progress = None) -> Dict:
             if similar_to and score >= SIMILARITY_THRESHOLD:
                 _report(progress, "과거 제목과 유사해 제목을 다시 짓는 중…")
                 candidate = rewrite_for_variety(
-                    final_title, similar_to, title_missing_keywords or target_keywords[:1],
+                    final_title, similar_to, title_missing_keywords or title_eligible[:1],
                     vendor, title_history,
                 )
                 # Keep the rewrite only if it still carries a target keyword —
                 # variety must not cost the SEO coverage stage 2b just secured.
-                if not target_keywords or title_keyword_coverage(candidate, target_keywords) != target_keywords:
+                # Measured against the title-eligible set, not every target: a
+                # demoted keyword was never allowed in the title, so its
+                # absence must not veto a rewrite.
+                if not title_eligible or title_keyword_coverage(candidate, title_eligible) != title_eligible:
                     final_title = candidate
                     title_variety["rewritten"] = True
                     title_variety["similar_to"] = similar_to

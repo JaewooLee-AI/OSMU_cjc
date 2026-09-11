@@ -38,7 +38,13 @@ MODES: Dict[str, dict] = {
     "rich": {
         "label": "내용 우선",
         "icon": "📖",
-        "caption": "소재를 깊게 풀어 씁니다. 키워드를 넣지 않으므로 검색 노출은 포기합니다.",
+        # The caption used to promise "키워드를 넣지 않으므로 검색 노출은 포기합니다".
+        # The draft prompt genuinely never shows the pool, but the brand name
+        # is itself a keyword and recurs naturally: measured over five posts
+        # this mode still landed 더봄봄 three to five times. Nothing is being
+        # inserted — the claim was just wrong, and a marketer who reads it and
+        # then sees the keyword in the report has been told the wrong thing.
+        "caption": "소재를 깊게 풀어 씁니다. 키워드를 맞추려는 교정을 하지 않아 검색 노출은 기대하지 않습니다.",
         "hint": HINT_NONE,
         # Targets are still *measured* and reported — the marketer should be
         # able to see which keywords the post happened to land on — but
@@ -71,10 +77,16 @@ MODES: Dict[str, dict] = {
         "caption": "키워드를 제목 앞쪽과 본문에 확실히 배치합니다. 소재 설명은 그만큼 줄어듭니다.",
         "hint": HINT_PLACEMENT,
         "max_targets": 3,
-        # One mention is enough to become a target here: in this mode the
-        # marketer has asked for the keyword machinery, so a keyword the
-        # draft brushed past is a candidate to amplify rather than noise.
-        "min_mentions": 1,
+        # Was 1, on the theory that a marketer who asked for the keyword
+        # machinery wants a brushed-past keyword amplified rather than
+        # dropped. The first batch run with modes showed what that actually
+        # buys: a single passing mention of 결혼답례품 in a DDP festival post
+        # promoted it to a target and then inflated it to a density of 4. One
+        # mention is not evidence the post is about the keyword — it is the
+        # noise floor of a brand that sells gifts. Two is the same bar every
+        # other mode uses, and the exposure this mode adds comes from
+        # placement and density, not from a lower bar for what counts.
+        "min_mentions": 2,
         "enforce_density": True,
         "density_min": 3,
         "density_max": 6,

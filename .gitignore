@@ -5,6 +5,7 @@ data/
 # 회사 원본 문서(제품제안서·사업신청서·교안 PDF). 여기서 뽑아 정리한 브랜드 킷은
 # core/brand_seed.py 에 텍스트로 들어 있으므로, 원본 없이도 앱은 그대로 동작합니다.
 company_info/
+company_info*.zip
 
 .venv/
 __pycache__/
@@ -12,3 +13,5 @@ __pycache__/
 .env
 .DS_Store
 .playwright-mcp/
+*.swp
+osmu-dashboard.png

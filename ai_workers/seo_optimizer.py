@@ -101,6 +101,31 @@ def _weight_of(keyword: str, weights: dict | None) -> float:
         return DEFAULT_KEYWORD_WEIGHT
 
 
+def title_candidates(keywords: list[str], weights: dict | None) -> list[str]:
+    """The keywords allowed to claim the title, as opposed to the body.
+
+    A weight below the neutral default is the brand saying this traffic
+    converts worse than average. That is survivable in the body — the phrase
+    appears, the post picks up the search, nobody is misled. In the title it
+    is not: the title is the whole promise of the post, and the first batch
+    run with modes produced '결혼답례품 고민이라면 DDP 서울패션마켓 더봄봄 방문'
+    for a festival announcement and '어린이집답례품 추천 …' for a keyring
+    launch. Both keywords are demoted to 0.3 in the brand kit; both took the
+    title anyway, because weight only reordered the candidates and every
+    stage that writes a title was handed the unfiltered pool.
+
+    Demotion is not exclusion, so these keywords stay in the pool for the
+    draft and for density: `select_target_keywords` still ranks them, the
+    news sweep still searches them. They simply cannot be what the post
+    announces itself as.
+
+    Returns [] when every keyword is demoted, and callers must handle that by
+    leaving the title alone — forcing the least-bad demoted keyword back in
+    would reinstate exactly the behaviour this removes.
+    """
+    return [kw for kw in keywords if _weight_of(kw, weights) >= DEFAULT_KEYWORD_WEIGHT]
+
+
 def _opportunity(keyword: str, weights: dict | None = None) -> float:
     """What this keyword is worth to the business, from cache only.
 
