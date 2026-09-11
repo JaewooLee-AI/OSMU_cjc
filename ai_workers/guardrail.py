@@ -206,7 +206,18 @@ _SUGGESTION_HINTS = ("권장합니다", "권장드립니다", "좋습니다", "�
 # 반대로 이 말들이 있으면 제안처럼 쓰여 있어도 위반 판정으로 둡니다. 인증 범위
 # 문제는 "명확히 나열하여 오해를 방지해야 합니다"처럼 개선 요구의 문장 형태를
 # 띠지만 환경성 표시·광고 위반 그 자체입니다.
-_VIOLATION_HINTS = ("위반", "과장", "오해", "금지", "근거 없", "허위", "확대", "소구", "지양")
+_VIOLATION_HINTS = (
+    "위반", "과장", "오해", "오인", "금지", "근거 없", "허위", "확대", "소구", "지양",
+    # '세상에 하나뿐인'을 두고 "객관적·절대적 사실로 오인될 수 있는 배타적
+    # 표현입니다. … 수정 권장합니다"라고 적은 지적이 '권장' 때문에 제안으로
+    # 강등돼 그대로 발행될 뻔했다. 최상급·배타적 표현은 표시광고법 위반이고
+    # 금기어 사전이 이미 '유일한'을 잡고 있는 바로 그 종류다.
+    "배타적", "최상급", "절대적", "단정",
+)
+
+
+def _has_violation_vocabulary(text: str) -> bool:
+    return any(hint in text.lower() for hint in _VIOLATION_HINTS)
 
 
 def _looks_like_suggestion(text: str) -> bool:
@@ -220,10 +231,9 @@ def _looks_like_suggestion(text: str) -> bool:
     violation treated as a suggestion ships a 환경성 표시·광고 문제 to a live
     blog under the company's name.
     """
-    lowered = text.lower()
-    if any(hint in lowered for hint in _VIOLATION_HINTS):
+    if _has_violation_vocabulary(text):
         return False
-    return any(hint in lowered for hint in _SUGGESTION_HINTS)
+    return any(hint in text.lower() for hint in _SUGGESTION_HINTS)
 
 
 def _classify_issues(raw_issues: List, reviewed_text: str) -> Tuple[List[str], List[str], Dict[str, str]]:
@@ -294,7 +304,19 @@ def run_llm_audit(text: str, vendor: str, brand_kit: Optional[dict] = None) -> D
         parsed = json.loads(match.group(0)) if match else {}
         issues = parsed.get("issues", [])
         grounded, unverified, phrase_map, misfiled = _classify_issues(issues, text)
-        declared = [str(s).strip() for s in (parsed.get("suggestions") or []) if str(s).strip()]
+        # 모델이 스스로 suggestions에 넣은 것도 그대로 믿지는 않습니다. 첫 5건
+        # 테스트에서 '세상에 하나뿐인'을 두고 "객관적·절대적 사실로 오인될 수 있는
+        # 배타적 표현"이라고 정확히 진단해 놓고는 그걸 제안 칸에 넣었습니다.
+        # 표시광고법상 배타적 표현이고 금기어 사전이 이미 '유일한'을 잡고 있는
+        # 바로 그 종류라, 제안으로 두면 그대로 발행됩니다. 위반 어휘가 있으면
+        # 되돌립니다 — 이 방향의 오류가 더 비싸다는 원칙은 여기서도 같습니다.
+        declared, promoted = [], []
+        for item in parsed.get("suggestions") or []:
+            text = str(item).strip()
+            if not text:
+                continue
+            (promoted if _has_violation_vocabulary(text) else declared).append(text)
+        grounded += promoted
         return {
             "compliance_pass": bool(parsed.get("compliance_pass", True)),
             "score": int(parsed.get("score", 100)),

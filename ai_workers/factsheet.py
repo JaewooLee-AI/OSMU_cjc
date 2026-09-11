@@ -35,6 +35,8 @@ kind of post it is, and the only one who knows that is the person writing it.
 """
 from __future__ import annotations
 
+import re
+
 from typing import Dict, List, Tuple
 
 Field = Tuple[str, str, str]  # (key, 라벨, placeholder)
@@ -170,11 +172,21 @@ def coverage(sheet: Sheet, content: str, fields: Dict[str, str] | None) -> Dict[
         return {"checked": False, "missing": [], "found": [], "missing_labels": []}
 
     body = content or ""
+    # 공백을 지우고 맞춰봅니다. 담당자는 '1만원 미만', '5만원'이라고 적고 모델은
+    # '1만 원 미만', '5만 원'이라고 쓰는데, 한국어에서 이건 표기 차이일 뿐 다른
+    # 사실이 아닙니다. 첫 5건 테스트에서 누락으로 잡힌 항목의 절반이 이것 하나
+    # 때문이었고, 본문에 멀쩡히 들어 있는 가격을 빠졌다고 경고하고 있었습니다.
+    squeezed = re.sub(r"\s", "", body)
     found, missing = [], []
     for key, value in present.items():
-        tokens = set(_tokens(value))
+        tokens = {t for t in _tokens(value) if len(t) > 1}
+        if not tokens:
+            # 한 글자짜리만 남는 값은 판정할 근거가 없습니다. 조사·단위 한 글자는
+            # 아무 본문에나 걸려서 있으나 없으나 '있음'이 됩니다.
+            found.append(key)
+            continue
         hit = value in body or (
-            tokens and len([t for t in tokens if t in body]) / len(tokens) >= MATCH_RATIO
+            len([t for t in tokens if _token_in(t, squeezed)]) / len(tokens) >= MATCH_RATIO
         )
         (found if hit else missing).append(key)
 
@@ -184,6 +196,19 @@ def coverage(sheet: Sheet, content: str, fields: Dict[str, str] | None) -> Dict[
         "missing": missing,
         "missing_labels": [sheet.labels[k] for k in missing],
     }
+
+
+def _token_in(token: str, squeezed_body: str) -> bool:
+    """토큰이 본문에 있는가. 조사가 붙은 형태도 같은 말로 봅니다.
+
+    담당자는 '한복에 관심있는 누구나'처럼 조사를 붙여 적고, 본문은 '한복'으로
+    씁니다. 마지막 한 글자를 떼고 한 번 더 보는 것으로 대부분의 조사(에, 를,
+    의, 로…)를 흡수합니다. 두 글자 토큰까지 자르면 한 글자가 되어 아무 데나
+    걸리므로 세 글자부터만 자릅니다.
+    """
+    if token in squeezed_body:
+        return True
+    return len(token) >= 3 and token[:-1] in squeezed_body
 
 
 def _tokens(value: str) -> List[str]:
