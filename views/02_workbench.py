@@ -510,6 +510,10 @@ with editor_col:
                         st.caption(f"✅ (교정되어 이미 해결됨) {issue}")
                     for issue in report.get("unverified_issues") or []:
                         st.caption(f"❓ (검증 안 됨, 참고용) {issue}")
+                    # 위반이 아니라 '넣으면 좋을 것'. 종합 판정을 흔들지 않습니다 —
+                    # 재생성으로 해결되는 종류가 아니라 본문을 보태야 하는 일입니다.
+                    for tip in report.get("suggestions") or []:
+                        st.caption(f"💡 (위반 아님 · 보완 제안) {tip}")
                 used_mode = report.get("content_mode")
                 if used_mode:
                     st.caption(f"🎚️ 생성 모드: **{content_mode.label_of(used_mode)}**")

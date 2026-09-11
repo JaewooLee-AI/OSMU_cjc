@@ -57,6 +57,10 @@ AUDIT_SYSTEM_PROMPT = (
     "설명 자체는 문제가 아닙니다. 과장하지 않은 표현까지 억지로 고치지 마세요.\n\n"
     "텍스트 중간에 `[IMAGE: 경로]` 형식의 태그가 있다면 사진 삽입 위치 마크업이므로 "
     "절대 삭제·수정·이동하지 말고 원래 자리에 글자 그대로 유지하세요.\n\n"
+    "**issues에는 위반만 넣으세요.** '이런 정보를 더 넣으면 신뢰도가 올라갑니다' 같은 "
+    "개선 제안은 위반이 아니므로 issues가 아니라 suggestions에 문자열로 넣으세요. "
+    "빠뜨린 정보를 추가하라는 요구는 언제나 suggestions입니다 — 글에 없는 내용은 "
+    "법령 위반이 아니라 선택의 문제입니다.\n\n"
     "issues의 각 항목은 반드시 {\"phrase\": ..., \"note\": ...} 객체로 작성하세요. "
     "phrase에는 본문에 실제로 등장하는, 문제가 된 표현 '하나만' 그대로 옮겨 적으세요 — "
     "본문에 없는 문구를 넣으면 안 되고, note에서 언급하는 대안·추천 표현을 phrase에 넣어서도 "
@@ -66,6 +70,7 @@ AUDIT_SYSTEM_PROMPT = (
     '{"compliance_pass": true, "score": 90, "strengths": ["잘 지켜진 점 1"], '
     '"issues": [{"phrase": "본문에 실제로 등장하는 문제 표현", '
     '"note": "문제 설명 및 권장 수정 방향"}], '
+    '"suggestions": ["위반은 아니지만 넣으면 좋을 내용"], '
     '"corrected_text": "교정된 전체 텍스트"}'
 )
 
@@ -146,16 +151,31 @@ def _verified_facts_block(brand_kit: dict) -> str:
     Without this the audit has no ground truth, so it cannot tell a correct
     price from an invented one — which is how three posts in one batch quoted
     '5,000원부터', '1만 원대부터' and '1만~3만 원대' for the same products.
+
+    The persona belongs here too, and not including it cost a real sentence.
+    It says the writer has taught 친환경 공예 for '10년 넘게'; core_facts says
+    the company was founded in 2017. The audit read the second as ground truth
+    for the first, concluded the company could only be in its ninth year, and
+    struck an approved claim about the founder's own teaching career out of the
+    post. The founder's experience predates the company — the two numbers were
+    never about the same thing.
     """
     facts = [str(f).strip() for f in (brand_kit.get("core_facts") or []) if str(f).strip()]
     glossary = [
         f"{term}: {desc}" for term, desc in (brand_kit.get("terminology") or {}).items() if desc
     ]
-    if not facts and not glossary:
+    persona = (brand_kit.get("persona") or "").strip()
+    if not facts and not glossary and not persona:
         return ""
     lines = ["\n\n[검증된 사실 — 아래에 없는 수치·인증·실적은 근거 없는 것으로 취급하세요]"]
     lines += [f"- {f}" for f in facts]
     lines += [f"- {g}" for g in glossary]
+    if persona:
+        lines += [
+            "\n[브랜드가 승인한 화자 설정 — 여기 담긴 경력·연차는 회사 설립연도와 별개로 "
+            "이미 검증된 사실입니다. 이 내용과 일치하는 서술은 과장으로 지적하지 마세요]",
+            f"- {persona}",
+        ]
     return "\n".join(lines)
 
 
@@ -177,6 +197,35 @@ def _parse_issue(item) -> Tuple[Optional[str], str]:
     return None, str(item)
 
 
+# 위반이 아니라 '더 넣으면 좋겠다'는 제안임을 드러내는 말. 아래 _looks_like_suggestion
+# 참고 — 프롬프트가 suggestions 필드를 따로 두었지만 지시는 보증이 아니고, 실제로
+# 새활용제품인증을 본문에 더 소개하라는 권고가 issues로 올라와 글 전체를 재생성
+# 대상으로 만들었다.
+_SUGGESTION_HINTS = ("권장합니다", "권장드립니다", "좋습니다", "높이는 것을", "추천합니다")
+
+# 반대로 이 말들이 있으면 제안처럼 쓰여 있어도 위반 판정으로 둡니다. 인증 범위
+# 문제는 "명확히 나열하여 오해를 방지해야 합니다"처럼 개선 요구의 문장 형태를
+# 띠지만 환경성 표시·광고 위반 그 자체입니다.
+_VIOLATION_HINTS = ("위반", "과장", "오해", "금지", "근거 없", "허위", "확대", "소구", "지양")
+
+
+def _looks_like_suggestion(text: str) -> bool:
+    """Is this finding a recommendation rather than a violation?
+
+    Only used as a backstop for a model that ignored the `suggestions` field.
+    Deliberately asymmetric: a finding is downgraded only when it reads as a
+    recommendation *and* carries none of the violation vocabulary. Anything
+    ambiguous stays an issue, because the cost of the two errors is not the
+    same — a suggestion treated as a violation wastes a regeneration, while a
+    violation treated as a suggestion ships a 환경성 표시·광고 문제 to a live
+    blog under the company's name.
+    """
+    lowered = text.lower()
+    if any(hint in lowered for hint in _VIOLATION_HINTS):
+        return False
+    return any(hint in lowered for hint in _SUGGESTION_HINTS)
+
+
 def _classify_issues(raw_issues: List, reviewed_text: str) -> Tuple[List[str], List[str], Dict[str, str]]:
     """Splits LLM-reported issues into grounded vs unverified, and records
     each issue's isolated phrase for later use (see `content_writer.py`
@@ -186,11 +235,14 @@ def _classify_issues(raw_issues: List, reviewed_text: str) -> Tuple[List[str], L
     not fail the campaign or alarm the marketer as if it were one.
     """
     lowered_text = reviewed_text.lower()
-    grounded, unverified = [], []
+    grounded, unverified, suggestions = [], [], []
     phrase_map: Dict[str, str] = {}
     for item in raw_issues:
         phrase, text = _parse_issue(item)
         if not text:
+            continue
+        if _looks_like_suggestion(text):
+            suggestions.append(text)
             continue
         if phrase:
             phrase_map[text] = phrase
@@ -198,7 +250,7 @@ def _classify_issues(raw_issues: List, reviewed_text: str) -> Tuple[List[str], L
             unverified.append(text)
         else:
             grounded.append(text)
-    return grounded, unverified, phrase_map
+    return grounded, unverified, phrase_map, suggestions
 
 
 def apply_blacklist_dictionary(text: str, blacklist_map: dict) -> Tuple[str, List[dict]]:
@@ -241,20 +293,23 @@ def run_llm_audit(text: str, vendor: str, brand_kit: Optional[dict] = None) -> D
         match = re.search(r"\{.*\}", cleaned, re.DOTALL)
         parsed = json.loads(match.group(0)) if match else {}
         issues = parsed.get("issues", [])
-        grounded, unverified, phrase_map = _classify_issues(issues, text)
+        grounded, unverified, phrase_map, misfiled = _classify_issues(issues, text)
+        declared = [str(s).strip() for s in (parsed.get("suggestions") or []) if str(s).strip()]
         return {
             "compliance_pass": bool(parsed.get("compliance_pass", True)),
             "score": int(parsed.get("score", 100)),
             "strengths": parsed.get("strengths", []),
             "grounded_issues": grounded,
             "unverified_issues": unverified,
+            "suggestions": declared + misfiled,
             "issue_phrases": phrase_map,
             "corrected_text": parsed.get("corrected_text") or text,
         }
     except Exception:
         return {
             "compliance_pass": True, "score": 100, "strengths": [], "grounded_issues": [],
-            "unverified_issues": [], "issue_phrases": {}, "corrected_text": text, "parse_error": raw,
+            "unverified_issues": [], "suggestions": [], "issue_phrases": {},
+            "corrected_text": text, "parse_error": raw,
         }
 
 
@@ -286,6 +341,8 @@ def review_and_sanitize(text: str, brand_kit: dict, vendor: str) -> Dict:
         "dictionary_hits": dictionary_hits,
         "llm_issues": grounded,
         "unverified_issues": audit["unverified_issues"],
+        # 위반이 아니라 '넣으면 좋을 것' — 판정을 좌우하지 않고 참고로만 보여줍니다.
+        "suggestions": audit.get("suggestions") or [],
         "issue_phrases": phrase_map,
         "cert_scope_issues": [f["phrase"] for f in cert_findings],
     }
@@ -297,7 +354,7 @@ def apply_guardrail_if_enabled(text: str, brand_kit: dict, vendor: str) -> Dict:
     if not brand_kit.get("guardrail_enabled", True):
         return {
             "final_text": text, "compliance_pass": None, "score": None, "strengths": [],
-            "dictionary_hits": [], "llm_issues": [], "unverified_issues": [], "issue_phrases": {},
-            "cert_scope_issues": [],
+            "dictionary_hits": [], "llm_issues": [], "unverified_issues": [], "suggestions": [],
+            "issue_phrases": {}, "cert_scope_issues": [],
         }
     return review_and_sanitize(text, brand_kit, vendor)
