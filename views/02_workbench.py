@@ -190,7 +190,10 @@ with editor_col:
         options=mode_keys,
         index=mode_index,
         horizontal=True,
-        format_func=lambda k: f"{content_mode.MODES[k]['icon']} {content_mode.MODES[k]['label']}",
+        format_func=lambda k: (
+            f"{content_mode.MODES[k]['icon']} {content_mode.MODES[k]['label']}"
+            + (" (기본)" if k == brand_default["key"] else "")
+        ),
         key=f"mode_{selected_id}",
         label_visibility="collapsed",
     )
