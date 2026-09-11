@@ -526,16 +526,37 @@ def pool_freshness(keywords: List[str]) -> dict:
     }
 
 
-def refresh_pool(keywords: List[str]) -> dict:
-    """Re-measure competition for the pool. One metered request per keyword.
+def pool_refresh_cost(keywords: List[str]) -> int:
+    """Metered requests `refresh_pool` would actually spend.
+
+    Only the blog document count is metered; 검색광고 volume is free. So the
+    bill is the number of keywords whose competition has expired or was never
+    measured, which is usually far fewer than the pool.
+    """
+    return sum(
+        1 for kw in keywords
+        if repo.get_cached_metric(kw, "blog_total", DOCUMENT_CACHE_DAYS) is None
+    )
+
+
+def refresh_pool(keywords: List[str], *, force: bool = False) -> dict:
+    """Bring the pool's numbers back to life. Metered, one request per
+    keyword that actually needs one.
 
     Deliberately not automatic. Generation must never make a metered call
     (see `seo_optimizer._opportunity`), and a background refresher would spend
     the daily quota on a schedule nobody is watching. This is the button that
     the freshness warning points at.
+
+    `force` re-buys everything including what is still fresh. It defaults off
+    because the first version did the opposite: it always passed
+    use_cache=False, so a button labelled "3회 호출" for three expired
+    keywords quietly spent sixteen. A paid action has to cost what the screen
+    says it costs.
     """
-    ranked = rank_keywords(keywords, use_cache=False, include_trend=False)
-    return {"refreshed": len(ranked), "rows": ranked}
+    billed = len(keywords) if force else pool_refresh_cost(keywords)
+    ranked = rank_keywords(keywords, use_cache=not force, include_trend=False)
+    return {"refreshed": len(ranked), "billed": billed, "rows": ranked}
 
 
 def sweep_candidates(

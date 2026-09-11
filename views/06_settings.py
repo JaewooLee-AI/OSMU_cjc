@@ -307,22 +307,28 @@ with tab_naver:
 
         # --- 가벼운 유지: 같은 키워드로 숫자만 새로 --------------------------
         if pool:
-            need = len(freshness["stale"]) or len(pool)
+            # 과금되는 것은 만료된 것뿐입니다 — 살아 있는 값은 캐시에서 읽고
+            # 호출이 나가지 않습니다.
+            need = keyword_research.pool_refresh_cost(pool)
             r1, r2 = st.columns([2, 3])
-            if r1.button(f"🔄 숫자만 새로 재기 ({need}회 호출)", key="pool_refresh"):
+            label = (
+                f"🔄 숫자만 새로 재기 ({need}회 호출)" if need
+                else "🔄 숫자만 새로 재기 (전부 최신 · 0회)"
+            )
+            if r1.button(label, key="pool_refresh", disabled=not need):
                 try:
-                    with st.spinner(f"{len(pool)}개 재측정 중…"):
+                    with st.spinner(f"{need}개 재측정 중…"):
                         result = keyword_research.refresh_pool(pool)
                 except keyword_research.NaverApiError as exc:
                     st.error(f"❌ {exc}")
                 else:
                     st.success(
-                        f"{result['refreshed']}개 재측정 완료. "
+                        f"{result['billed']}개 재측정 완료 (나머지는 캐시에서 읽어 호출 0). "
                         f"{keyword_research.DOCUMENT_CACHE_DAYS}일간 유효합니다."
                     )
                     st.rerun()
             r2.caption(
-                "키워드 목록은 그대로 두고 검색량·경쟁도만 다시 잽니다. "
+                "키워드 목록은 그대로 두고 만료된 검색량·경쟁도만 다시 잽니다. "
                 "**평소 달에는 이것만 누르면 됩니다.**"
             )
 
