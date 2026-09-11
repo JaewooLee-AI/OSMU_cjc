@@ -141,7 +141,11 @@ def notice_block(notice_fields: dict | None) -> List[str]:
     The prohibition is the same one core_facts already carries, aimed at the
     other half of the post. A model asked to write a 모집 공고 with no fee in
     front of it will supply a plausible one — and a 수강료 invented by an LLM
-    is a number the company then has to honour or retract.
+    is a number the company then has to honour or retract. The same pull
+    applies to shape, not just numbers: given a 추석 연휴 안내 carrying only a
+    date, a model that has seen a thousand 모집 공고 will happily add a 신청
+    방법 nobody asked for, so the absent fields are named and refused
+    explicitly rather than just left out.
     """
     from ai_workers import notice
 
@@ -153,20 +157,21 @@ def notice_block(notice_fields: dict | None) -> List[str]:
     absent = [label for key, label in notice.LABELS.items() if key not in present]
 
     block = (
-        "[공지 정보 — 이 글은 공지·모집 글입니다]\n"
+        "[공지 정보 — 이 글은 공지 글입니다]\n"
         f"{lines}\n\n"
         "위 항목은 독자가 이 글을 읽는 이유입니다. **하나도 빠뜨리지 말고, 숫자와 "
-        "날짜를 바꾸지 말고** 본문에 그대로 담으세요. 읽는 사람이 '언제, 어디서, "
-        "얼마에, 어떻게 신청하는지'를 본문만 보고 알 수 있어야 합니다. 분위기 "
-        "묘사로 시작하더라도 이 정보들이 본문 안에 분명히 자리 잡아야 합니다."
+        "날짜를 바꾸지 말고** 본문에 그대로 담으세요. 분위기 묘사로 시작하더라도 "
+        "이 사실들이 본문 안에 분명히 자리 잡아야 합니다."
     )
     if absent:
         block += (
-            "\n\n위 목록에 없는 항목(" + ", ".join(absent) + ")은 담당자가 아직 "
-            "정하지 않았거나 공개하지 않는 정보입니다. **절대 지어내지 마세요.** "
+            "\n\n위에 적히지 않은 항목(" + ", ".join(absent) + ")은 이 공지에 "
+            "해당하지 않거나 아직 정해지지 않은 것입니다. **절대 지어내지 마세요.** "
             "그럴듯한 날짜·금액·정원을 만들어 넣는 것은 회사가 지키지 못할 약속을 "
-            "발행하는 것과 같습니다. 모르는 항목은 아예 언급하지 말고, 필요하면 "
-            "'자세한 내용은 문의해 주세요' 정도로만 넘기세요."
+            "발행하는 것과 같습니다. 해당 없는 항목은 아예 언급하지 마세요 — "
+            "연휴 안내에 신청 방법을, 휴무 안내에 정원을 끼워 넣지 마세요. "
+            "독자가 더 알아야 할 것이 있으면 '자세한 내용은 문의해 주세요' 정도로만 "
+            "넘기세요."
         )
     return [block]
 

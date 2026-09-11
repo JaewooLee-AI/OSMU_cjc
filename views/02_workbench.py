@@ -155,18 +155,20 @@ with editor_col:
         key=f"memo_{selected_id}",
     )
 
-    # 공지·모집 글은 메모를 아무리 길게 써도 일시·비용·신청 방법이 빠지면
-    # 공지가 되지 않습니다. 모드를 바꿔서 해결되는 문제가 아니라서 별도 입력을
-    # 둡니다 — ai_workers/notice.py 참고.
+    # 공지 글은 메모를 아무리 길게 써도 날짜나 신청 방법이 빠지면 공지가 되지
+    # 않습니다. 모드를 바꿔서 해결되는 문제가 아니라서 별도 입력을 둡니다 —
+    # ai_workers/notice.py 참고.
     saved_notice = campaign.get("notice_fields") or {}
     with st.expander(
-        "📣 공지·모집 정보" + (f" ({len(notice.clean(saved_notice))}개 입력됨)" if saved_notice else ""),
+        "📣 공지 정보" + (f" ({len(notice.clean(saved_notice))}개 입력됨)" if saved_notice else ""),
         expanded=bool(saved_notice),
     ):
         st.caption(
-            "강좌 모집, 행사 안내, 팝업 공지처럼 **독자가 신청하거나 찾아와야 하는 글**에만 "
-            "채우세요. 채운 항목은 본문에 반드시 들어가고, 비워둔 항목은 AI가 지어내지 "
-            "않습니다. 일반 글이면 전부 비워두시면 됩니다."
+            "연휴·휴무 안내, 강좌 모집, 행사·팝업 공지처럼 **독자에게 알려야 할 사실이 "
+            "있는 글**에 채우세요. **해당하는 항목만** 채우면 됩니다 — 전부 채울 "
+            "필요도, 정해진 조합도 없습니다. 예를 들어 추석 연휴 안내는 일시 하나로 "
+            "충분합니다. 채운 항목은 본문에 반드시 들어가고, 비워둔 항목은 AI가 "
+            "지어내지 않습니다. 일반 글이면 전부 비워두세요."
         )
         notice_values = {}
         notice_cols = st.columns(2)
@@ -176,12 +178,6 @@ with editor_col:
                 value=saved_notice.get(fkey) or "",
                 placeholder=fplaceholder,
                 key=f"notice_{fkey}_{selected_id}",
-            )
-        missing_essential = notice.missing_essentials(notice_values)
-        if notice.is_notice(notice_values) and missing_essential:
-            st.warning(
-                "공지 글인데 " + ", ".join(missing_essential) + " 이(가) 비어 있습니다. "
-                "독자가 언제 무엇을 해야 하는지 알 수 없는 글이 됩니다."
             )
 
     st.markdown("##### 🎚️ 콘텐츠 모드")

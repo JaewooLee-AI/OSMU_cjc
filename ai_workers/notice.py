@@ -1,4 +1,4 @@
-"""공지·모집 글이 반드시 담아야 하는 사실들.
+"""공지 글이 담아야 하는 사실들.
 
 The first batch run with content modes exposed a problem the modes cannot
 solve. A 강사과정 모집 글 was generated three times — 내용 우선, 균형,
@@ -21,6 +21,13 @@ Nothing here is inferred or defaulted: an empty field stays empty and the
 draft prompt is told, in the same terms core_facts uses, not to invent it.
 A 공지 that quietly acquires a plausible-looking 수강료 is worse than one
 that omits it.
+
+The 모집 공고 that prompted this is the field list's heaviest user, not its
+only one, and the list must not be read as a form to complete. '2026년 9월
+24일부터 27일까지 추석 연휴입니다' is a finished 공지 carrying one field;
+a 임시 휴무, a 배송 지연, a 팝업 종료 each carry a different two or three.
+Every field is optional and none is ever prompted for — see MATCH_RATIO's
+neighbouring comment on why there is no required set.
 """
 from __future__ import annotations
 
@@ -29,7 +36,7 @@ from typing import Dict, List, Tuple
 # (key, 라벨, placeholder). 순서가 곧 입력 화면의 순서이자 프롬프트에 실리는
 # 순서입니다.
 FIELDS: List[Tuple[str, str, str]] = [
-    ("when", "일시", "예: 2026년 10월 14일(화) ~ 10월 16일(목), 매일 10:00~13:00"),
+    ("when", "일시", "예: 2026년 9월 24일(목) ~ 9월 27일(일) / 10월 14일 10:00~13:00"),
     ("where", "장소", "예: 더스티치 성수 작업장 (서울 성동구 …)"),
     ("who", "대상", "예: 미술 강사, 공방 운영자, 관련 자격 취득 예정자"),
     ("capacity", "정원", "예: 12명 (선착순 마감)"),
@@ -42,9 +49,12 @@ FIELDS: List[Tuple[str, str, str]] = [
 
 LABELS: Dict[str, str] = {key: label for key, label, _ in FIELDS}
 
-# 이것들이 비어 있으면 공지로 성립하지 않습니다. 나머지는 있으면 좋은 정보.
-ESSENTIAL = ("when", "how")
-
+# 필수 항목은 없습니다. 모집 공고는 대체로 이 목록을 거의 다 채우지만, 공지는
+# 그 한 종류일 뿐입니다 — '2026년 9월 24일부터 27일까지 추석 연휴입니다'는
+# 일시 하나로 완결된 공지이고, 거기에 정원이나 신청 방법을 요구하는 것은 그냥
+# 틀린 요구입니다. 어떤 항목이 필요한지는 공지의 종류가 정하고, 그 종류를 아는
+# 것은 담당자뿐이라 여기서 판정하지 않습니다.
+#
 # 공지 항목이 본문에 살아남았다고 볼 토큰 일치 비율 — coverage() 참고.
 MATCH_RATIO = 0.6
 
@@ -64,12 +74,6 @@ def is_notice(fields: Dict[str, str] | None) -> bool:
     """A campaign is a 공지 because someone filled the 공지 fields in, not
     because of a separate type flag — one less thing to keep in sync."""
     return bool(clean(fields))
-
-
-def missing_essentials(fields: Dict[str, str] | None) -> List[str]:
-    """Essential fields left blank, as labels, for warning the marketer."""
-    present = clean(fields)
-    return [LABELS[key] for key in ESSENTIAL if key not in present]
 
 
 def coverage(content: str, fields: Dict[str, str] | None) -> Dict[str, object]:
