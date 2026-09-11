@@ -93,6 +93,10 @@ create table if not exists campaigns (
     -- back to the default for anything it doesn't recognise, and a rejected
     -- INSERT would be a worse failure than an unknown mode.
     content_mode        text,
+    -- 공지·모집 글의 일시/장소/비용/신청 방법 (JSON 오브젝트, 빈 값은 저장하지
+    -- 않음). 비어 있으면 일반 글입니다 — 별도 유형 플래그를 두지 않는 이유는
+    -- ai_workers/notice.py 참고.
+    notice_fields       text not null default '{}',
     storage_file_paths  text not null default '[]',
     guardrail_passed    integer,
     guardrail_report    text,
@@ -264,7 +268,11 @@ _ADDED_COLUMNS = {
     # `content_mode` is nullable on purpose: null means "use the brand
     # default", so changing that default moves every campaign that never had
     # an explicit choice, which is what a default should do.
-    "campaigns": {"source_title": "text", "content_mode": "text"},
+    "campaigns": {
+        "source_title": "text",
+        "content_mode": "text",
+        "notice_fields": "text not null default '{}'",
+    },
     "brand_kit": {
         "keyword_weights": "text not null default '{}'",
         "default_content_mode": "text not null default 'balanced'",

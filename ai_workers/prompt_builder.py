@@ -132,6 +132,45 @@ def length_block(length_hint: int | None) -> List[str]:
     ]
 
 
+def notice_block(notice_fields: dict | None) -> List[str]:
+    """The announcement's own facts, when the marketer supplied them.
+
+    Placed with the source memo rather than in the system prompt: these are
+    this post's subject, not standing brand configuration.
+
+    The prohibition is the same one core_facts already carries, aimed at the
+    other half of the post. A model asked to write a 모집 공고 with no fee in
+    front of it will supply a plausible one — and a 수강료 invented by an LLM
+    is a number the company then has to honour or retract.
+    """
+    from ai_workers import notice
+
+    present = notice.clean(notice_fields)
+    if not present:
+        return []
+
+    lines = "\n".join(f"- {notice.LABELS[key]}: {value}" for key, value in present.items())
+    absent = [label for key, label in notice.LABELS.items() if key not in present]
+
+    block = (
+        "[공지 정보 — 이 글은 공지·모집 글입니다]\n"
+        f"{lines}\n\n"
+        "위 항목은 독자가 이 글을 읽는 이유입니다. **하나도 빠뜨리지 말고, 숫자와 "
+        "날짜를 바꾸지 말고** 본문에 그대로 담으세요. 읽는 사람이 '언제, 어디서, "
+        "얼마에, 어떻게 신청하는지'를 본문만 보고 알 수 있어야 합니다. 분위기 "
+        "묘사로 시작하더라도 이 정보들이 본문 안에 분명히 자리 잡아야 합니다."
+    )
+    if absent:
+        block += (
+            "\n\n위 목록에 없는 항목(" + ", ".join(absent) + ")은 담당자가 아직 "
+            "정하지 않았거나 공개하지 않는 정보입니다. **절대 지어내지 마세요.** "
+            "그럴듯한 날짜·금액·정원을 만들어 넣는 것은 회사가 지키지 못할 약속을 "
+            "발행하는 것과 같습니다. 모르는 항목은 아예 언급하지 말고, 필요하면 "
+            "'자세한 내용은 문의해 주세요' 정도로만 넘기세요."
+        )
+    return [block]
+
+
 SUBJECT_INSTRUCTION = (
     "**이 소재가 글의 중심입니다.** 독자가 이 글에서 가장 먼저, 가장 많이 알게 되어야 하는 "
     "것은 위 소재의 구체적인 내용입니다. 회사 소개·브랜드 철학·제품 라인업·환경 가치는 "

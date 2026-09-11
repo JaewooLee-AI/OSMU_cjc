@@ -18,7 +18,7 @@ import streamlit as st
 import streamlit.components.v1 as components
 
 import simulators
-from ai_workers import content_mode, vision
+from ai_workers import content_mode, notice, vision
 from ai_workers.content_writer import LENGTH_MODES, revise_content, run_pipeline
 from core import repo, storage
 
@@ -155,6 +155,35 @@ with editor_col:
         key=f"memo_{selected_id}",
     )
 
+    # 공지·모집 글은 메모를 아무리 길게 써도 일시·비용·신청 방법이 빠지면
+    # 공지가 되지 않습니다. 모드를 바꿔서 해결되는 문제가 아니라서 별도 입력을
+    # 둡니다 — ai_workers/notice.py 참고.
+    saved_notice = campaign.get("notice_fields") or {}
+    with st.expander(
+        "📣 공지·모집 정보" + (f" ({len(notice.clean(saved_notice))}개 입력됨)" if saved_notice else ""),
+        expanded=bool(saved_notice),
+    ):
+        st.caption(
+            "강좌 모집, 행사 안내, 팝업 공지처럼 **독자가 신청하거나 찾아와야 하는 글**에만 "
+            "채우세요. 채운 항목은 본문에 반드시 들어가고, 비워둔 항목은 AI가 지어내지 "
+            "않습니다. 일반 글이면 전부 비워두시면 됩니다."
+        )
+        notice_values = {}
+        notice_cols = st.columns(2)
+        for idx, (fkey, flabel, fplaceholder) in enumerate(notice.FIELDS):
+            notice_values[fkey] = notice_cols[idx % 2].text_input(
+                flabel,
+                value=saved_notice.get(fkey) or "",
+                placeholder=fplaceholder,
+                key=f"notice_{fkey}_{selected_id}",
+            )
+        missing_essential = notice.missing_essentials(notice_values)
+        if notice.is_notice(notice_values) and missing_essential:
+            st.warning(
+                "공지 글인데 " + ", ".join(missing_essential) + " 이(가) 비어 있습니다. "
+                "독자가 언제 무엇을 해야 하는지 알 수 없는 글이 됩니다."
+            )
+
     st.markdown("##### 🎚️ 콘텐츠 모드")
     brand_default = content_mode.resolve(None, brand_kit)
     mode_keys = content_mode.ORDER
@@ -241,14 +270,16 @@ with editor_col:
     save_col, gen_col = st.columns([1, 1])
     if save_col.button("💾 저장", width='stretch'):
         repo.update_campaign(
-            selected_id, title=title.strip() or None, memo=memo, content_mode=chosen_mode
+            selected_id, title=title.strip() or None, memo=memo, content_mode=chosen_mode,
+            notice_fields=notice.clean(notice_values),
         )
         st.toast("저장했습니다.")
 
     can_generate = bool(memo.strip() or campaign.get("source_url"))
     if gen_col.button("🪄 초안 생성", type="primary", width='stretch', disabled=not can_generate):
         repo.update_campaign(
-            selected_id, title=title.strip() or None, memo=memo, content_mode=chosen_mode
+            selected_id, title=title.strip() or None, memo=memo, content_mode=chosen_mode,
+            notice_fields=notice.clean(notice_values),
         )
         with st.status("초안을 만드는 중…", expanded=True) as status_box:
             try:
@@ -451,6 +482,18 @@ with editor_col:
             st.rerun()
 
         report = campaign.get("guardrail_report")
+
+        # 리포트 expander 바깥에 둡니다. 밀도나 금기어와 달리 자동으로 되돌릴 수
+        # 없고(날짜·금액을 LLM이 다시 쓰게 두지 않습니다), 이대로 발행하면 독자가
+        # 신청할 방법이 없는 글이 나갑니다 — 접힌 패널 안에 둘 경고가 아닙니다.
+        notice_report = (report or {}).get("notice") or {}
+        if notice_report.get("checked") and notice_report.get("missing_labels"):
+            st.warning(
+                "📣 공지 정보 누락 — **"
+                + ", ".join(notice_report["missing_labels"])
+                + "** 이(가) 본문에 반영되지 않았습니다. 아래 본문에서 직접 넣고 저장하세요."
+            )
+
         if report:
             with st.expander("🛡️ 컴플라이언스 / SEO 리포트"):
                 if report.get("compliance_pass") is None:

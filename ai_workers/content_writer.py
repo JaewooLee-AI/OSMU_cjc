@@ -47,9 +47,11 @@ from ai_workers.photo_placement import (
 from ai_workers.prompt_builder import (
     SUBJECT_INSTRUCTION,
     build_blog_system_prompt,
+    notice_block,
     photo_context,
     photo_instruction,
 )
+from ai_workers import notice
 from ai_workers import search_intent
 from ai_workers.proofreader import proofread
 from ai_workers.seo_optimizer import (
@@ -189,6 +191,7 @@ def _quality_pass(
     source_url: Optional[str],
     progress: Progress,
     mode: Optional[dict] = None,
+    notice_fields: Optional[dict] = None,
 ):
     """Stages 3~6c: compliance, SEO density, and the deterministic backstops.
 
@@ -312,6 +315,10 @@ def _quality_pass(
         if any(kw.lower() in s or s in kw.lower() for s in stripped)
     ]
 
+    # 공지 사실은 측정만 하고 고치지 않습니다 — 날짜와 금액을 LLM이 되살리게
+    # 두는 것보다, 빠졌다고 알려주고 담당자가 편집기에서 넣는 편이 안전합니다.
+    report["notice"] = notice.coverage(final_content, notice_fields)
+
     report["recommendation"] = _recommendation(report)
     return final_content, report
 
@@ -335,6 +342,7 @@ def run_pipeline(campaign_id: str, progress: Progress = None) -> Dict:
         memo = (campaign.get("memo") or "").strip()
         given_title = (campaign.get("title") or "").strip()
         source_url = campaign.get("source_url")
+        notice_fields = campaign.get("notice_fields") or {}
         is_news = campaign.get("source_type") == "news"
         seo_keywords = brand_kit.get("seo_keywords") or []
         mode = content_mode.resolve(campaign.get("content_mode"), brand_kit)
@@ -396,6 +404,9 @@ def run_pipeline(campaign_id: str, progress: Progress = None) -> Dict:
                 "위 메모를 자연스럽게 확장한 네이버 블로그 포스트 본문을 작성하세요. "
                 + SUBJECT_INSTRUCTION
             )
+        # 공지 정보는 뉴스/일반 어느 쪽이든 붙습니다 — 소재 설명 바로 뒤, 사진
+        # 지시 앞에 와야 '이 글이 알려야 할 사실'로 읽힙니다.
+        seed_blocks += notice_block(notice_fields)
 
         prompt = "\n\n".join(
             seed_blocks
@@ -502,7 +513,7 @@ def run_pipeline(campaign_id: str, progress: Progress = None) -> Dict:
 
         final_content, report = _quality_pass(
             draft, final_title, target_keywords, skipped_keywords, brand_kit, vendor,
-            storage_file_paths, is_news, source_url, progress, mode,
+            storage_file_paths, is_news, source_url, progress, mode, notice_fields,
         )
         report["title_dictionary_hits"] = title_dict_hits
         report["title_seo"] = {
@@ -646,6 +657,17 @@ def revise_content(
                 )
             )
 
+        # 줄여 쓰기 요청은 군더더기부터 덜어내는데, 공지 글에서 가장 군더더기처럼
+        # 보이는 줄이 정작 일시·비용·신청 방법입니다. 수정 호출이 실제로 일어날
+        # 때만 붙입니다.
+        if requests and notice.is_notice(campaign.get("notice_fields")):
+            kept = notice.clean(campaign.get("notice_fields"))
+            requests.append(
+                "[공지 정보 유지]\n다음 사실은 이 글의 존재 이유이므로 어떤 수정 "
+                "요청에도 본문에서 빼거나 바꾸지 마세요:\n"
+                + "\n".join(f"- {notice.LABELS[k]}: {v}" for k, v in kept.items())
+            )
+
         if requests:
             _report(progress, "수정 요청 반영 중…")
             revised = generate_text(
@@ -676,6 +698,7 @@ def revise_content(
             revised, final_title, target_keywords, skipped_keywords, brand_kit, vendor,
             storage_file_paths, campaign.get("source_type") == "news",
             campaign.get("source_url"), progress, mode,
+            campaign.get("notice_fields") or {},
         )
         report["revision"] = {
             "instruction": instruction,
