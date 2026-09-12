@@ -289,4 +289,3 @@ if history_count:
         if st.button("🗑️ 제목 이력 전체 삭제", key="clear_title_history"):
             repo.clear_title_history()
             st.rerun()
-        st.rerun()
