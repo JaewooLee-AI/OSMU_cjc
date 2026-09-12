@@ -70,13 +70,34 @@ with tab_llm:
                         if not ok:
                             st.error(f"❌ {message}")
                         else:
-                            st.success(f"✅ {message}")
                             encrypted = saved["encrypted_api_key"] if reuse_saved else encrypt_api_key(key_to_test)
                             repo.upsert_llm_setting(key, model_name, encrypted)
+                            # 연결이 확인된 벤더를 그 자리에서 바로 기본 생성 모델로
+                            # 지정합니다. 예전에는 등록과 "기본으로 지정"이 별개 버튼
+                            # 이었는데, 소상공인 고객이 키만 넣고 이 두 번째 단계를
+                            # 빠뜨리면 글쓰기 시점에 "기본 생성 모델이 지정되지
+                            # 않았습니다" 오류를 처음 봅니다 — 이미 등록했다고 믿는
+                            # 상태에서 나오는 오류라 원인을 짐작하기 어렵습니다.
+                            # 벤더를 여러 개 등록해두고 쓰는 사용자는, 되돌아가고 싶은
+                            # 벤더의 카드에서 이 버튼을 한 번 더 누르면 됩니다(키를
+                            # 비워두면 저장된 키를 그대로 재검증합니다).
+                            repo.save_brand_kit(default_generation_vendor=key)
+                            st.success(f"✅ {message} · 기본 생성 모델로 지정했습니다.")
                             st.rerun()
 
                 if delete_clicked:
                     repo.delete_llm_setting(key)
+                    # 지금 기본으로 쓰이던 벤더를 지웠다면, 남은 벤더 중 하나로
+                    # 넘기거나(있으면) 아예 비웁니다 — 지운 벤더를 계속 기본으로
+                    # 가리키게 두면 다음 생성 시도에서야 실패로 드러납니다.
+                    if repo.get_brand_kit().get("default_generation_vendor") == key:
+                        remaining = [
+                            k for k in VENDORS
+                            if k != key and (repo.get_llm_setting(k) or {}).get("is_active")
+                        ]
+                        repo.save_brand_kit(
+                            default_generation_vendor=remaining[0] if remaining else None
+                        )
                     st.rerun()
 
     all_keys = list(VENDORS.keys())
@@ -90,26 +111,22 @@ with tab_llm:
     st.subheader("기본 생성 모델")
     st.caption("블로그 초안, 컴플라이언스 감사, SEO 재조정, 채널별 카피에 실제로 사용할 모델입니다.")
 
-    usable = [k for k in all_keys if (saved_settings.get(k) or {}).get("is_active")]
-    brand_kit = repo.get_brand_kit()
-    if not usable:
-        st.warning("아직 등록된 벤더가 없습니다. 위에서 먼저 하나 이상 등록/테스트하세요.")
-    else:
-        specs = VENDORS
-        current = brand_kit.get("default_generation_vendor")
-        idx = usable.index(current) if current in usable else 0
-        chosen = st.selectbox(
-            "생성 · 검수 모델",
-            options=usable,
-            index=idx,
-            format_func=lambda k: f"{specs[k]['icon']} {specs[k]['label']} ({saved_settings[k]['model_name']})",
+    # 별도 선택 UI를 두지 않습니다 — 위 카드에서 연결 테스트가 성공하는 순간
+    # 그 벤더가 바로 기본으로 지정되므로(render_vendor_card 참고), 여기는
+    # "지금 뭐가 쓰이고 있는지"만 보여주는 읽기 전용 상태입니다. 다른 벤더로
+    # 바꾸고 싶으면 그 카드에서 연결 테스트를 다시 누르면 됩니다.
+    current = repo.get_brand_kit().get("default_generation_vendor")
+    if current and (saved_settings.get(current) or {}).get("is_active"):
+        spec = VENDORS[current]
+        st.success(
+            f"{spec['icon']} **{spec['label']}** ({saved_settings[current]['model_name']}) 사용 중"
         )
-        if current and current not in usable:
-            st.warning(f"이전에 지정했던 '{current}'가 더 이상 활성 상태가 아닙니다. 다시 지정해주세요.")
-        if st.button("기본 생성 모델로 지정", type="primary"):
-            repo.save_brand_kit(default_generation_vendor=chosen)
-            st.success(f"'{specs[chosen]['label']}'을(를) 기본 생성 모델로 지정했습니다.")
-            st.rerun()
+    else:
+        st.warning(
+            "아직 기본 생성 모델이 없습니다. 위 카드에서 [연결 테스트 · 저장]을 누르면 "
+            "그 벤더가 바로 기본으로 지정됩니다."
+        )
+    st.caption("다른 벤더로 바꾸려면, 그 벤더 카드에서 [연결 테스트 · 저장]을 다시 누르세요.")
 
 
 # -------------------------------------------------------------- naver api hub
