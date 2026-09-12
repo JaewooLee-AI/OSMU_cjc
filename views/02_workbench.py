@@ -499,6 +499,18 @@ with editor_col:
                     + "** 이(가) 본문에 반영되지 않았습니다. 아래 본문에서 직접 넣고 저장하세요."
                 )
 
+        # 인스타/X/쇼츠도 각자 감사를 받지만, 이건 별도 채널의 별도 위반이라
+        # 네이버 본문의 종합 판정(🔁/✅)에 섞지 않습니다. 감사는 돌았는데 결과를
+        # 버려서, 인증 범위를 넘겨 쓴 인스타 캡션이 리포트에 아무 표시 없이
+        # 저장된 적이 있어 이렇게 따로 눈에 띄게 둡니다.
+        sns_labels = {"instagram": "📸 인스타그램 캡션", "x": "🐦 X 스레드", "shorts": "🎬 쇼츠 자막"}
+        for ch_key, ch_label in sns_labels.items():
+            compliance = ((report or {}).get("sns_compliance") or {}).get(ch_key) or {}
+            if compliance.get("checked") and compliance.get("compliance_pass") is False:
+                st.warning(
+                    f"{ch_label} 컴플라이언스 미해결 — " + " / ".join(compliance.get("issues") or [])
+                )
+
         if report:
             with st.expander("🛡️ 컴플라이언스 / SEO 리포트"):
                 if report.get("compliance_pass") is None:

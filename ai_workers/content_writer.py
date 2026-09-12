@@ -591,7 +591,7 @@ def run_pipeline(campaign_id: str, progress: Progress = None) -> Dict:
         )
         shorts = _safe(
             progress, "쇼츠 구성안 생성 중…",
-            lambda: write_shorts_script(seed_note, caption_values, brand_kit, vendor),
+            lambda: _guarded_shorts(seed_note, caption_values, brand_kit, vendor),
             {"title": "", "hook": "", "scenes": [], "hashtags": []},
         )
         naver_hashtags = _safe(
@@ -610,6 +610,18 @@ def run_pipeline(campaign_id: str, progress: Progress = None) -> Dict:
             instagram["caption"], instagram["hashtags"]
         )
         report["sns_checks"] = {"x": x_issues, "instagram": ig_issues}
+        # 형식 검증과는 별개입니다 — 이건 컴플라이언스 위반이 실제로 남아 있는지이고,
+        # 위 sns_checks(글자수·해시태그 개수)와 섞이면 화면에서 사라지기 쉽습니다.
+        # _guarded_instagram/_guarded_x가 감사는 이미 돌렸는데 결과를 버리고 있었고,
+        # 그 결과 미보유 인증 확대 문장이 리포트에 아무 표시 없이 발행된 적이 있습니다.
+        # shorts_script는 DB 컬럼 그대로 저장되므로, 리포트 전용인 compliance 키는
+        # 저장 전에 떼어냅니다 — 인스타/X와 동일하게 캡션 자체와 감사 결과를 분리합니다.
+        shorts_compliance = shorts.pop("compliance", None) or {"checked": False}
+        report["sns_compliance"] = {
+            "instagram": instagram.get("compliance") or {"checked": False},
+            "x": x_result.get("compliance") or {"checked": False},
+            "shorts": shorts_compliance,
+        }
 
         repo.update_campaign(
             campaign_id,
@@ -802,6 +814,30 @@ def _safe(progress: Progress, message: str, fn: Callable, fallback):
         return fallback
 
 
+def _compliance_summary(guarded: dict) -> dict:
+    """The subset of a guardrail result worth showing the marketer for a
+    secondary channel — same shape for Instagram and X so the workbench can
+    render both with one code path.
+
+    Extracted because the caller used to keep only `final_text` and throw the
+    rest away. The deterministic dictionary substitution still landed (it's
+    baked into `final_text` either way), but anything the *LLM audit* only
+    flagged rather than auto-corrected — including the certification-scope
+    check, which by design never rewrites text, only detects — vanished
+    without a trace. A live 미보유 인증 확대 sentence ('더봄봄의 주요 제품들은
+    … 인증을 받아') shipped in an Instagram caption during testing with the
+    report showing nothing wrong, because nothing downstream of this function
+    ever looked at `compliance_pass` or `llm_issues` for these two channels.
+    """
+    return {
+        "checked": guarded.get("compliance_pass") is not None,
+        "compliance_pass": guarded.get("compliance_pass"),
+        "score": guarded.get("score"),
+        "issues": list(guarded.get("llm_issues") or []),
+        "dictionary_hits": list(guarded.get("dictionary_hits") or []),
+    }
+
+
 def _guarded_instagram(note: str, caption_values: List[str], brand_kit: dict, vendor: str) -> dict:
     """The caption goes through the same compliance guardrail as the Naver
     body — it's separately generated text making its own claims about the
@@ -810,6 +846,7 @@ def _guarded_instagram(note: str, caption_values: List[str], brand_kit: dict, ve
     result = write_instagram_caption(note, caption_values, brand_kit, vendor)
     guarded = apply_guardrail_if_enabled(result["caption"], brand_kit, vendor)
     result["caption"] = guarded["final_text"]
+    result["compliance"] = _compliance_summary(guarded)
     return result
 
 
@@ -832,11 +869,14 @@ def _guarded_x(note: str, caption_values: List[str], brand_kit: dict, vendor: st
     result = write_x_thread(note, caption_values, brand_kit, vendor)
     tweets = result["tweets"]
     if not tweets or not brand_kit.get("guardrail_enabled", True):
+        result["compliance"] = _compliance_summary({})
         return result
 
     joined = _TWEET_DELIMITER.join(tweets)
-    guarded = apply_guardrail_if_enabled(joined, brand_kit, vendor)["final_text"]
-    parts = [p.strip() for p in guarded.split(_TWEET_DELIMITER.strip())]
+    guarded = apply_guardrail_if_enabled(joined, brand_kit, vendor)
+    result["compliance"] = _compliance_summary(guarded)
+    guarded_text = guarded["final_text"]
+    parts = [p.strip() for p in guarded_text.split(_TWEET_DELIMITER.strip())]
     parts = [p for p in parts if p]
 
     if len(parts) == len(tweets):
@@ -849,4 +889,52 @@ def _guarded_x(note: str, caption_values: List[str], brand_kit: dict, vendor: st
         result["tweets"] = [
             apply_blacklist_dictionary(t, brand_kit.get("blacklist_map", {}))[0] for t in tweets
         ]
+    return result
+
+
+_SHORTS_DELIMITER = "\n<<<SEG>>>\n"
+
+
+def _guarded_shorts(note: str, caption_values: List[str], brand_kit: dict, vendor: str) -> dict:
+    """Same audit as Instagram/X, applied last — this channel had none at all.
+
+    Only the title, hook and on-screen captions are audited: those are the
+    words a viewer reads, and the only place a greenwashing or over-broad
+    certification claim could actually land. `shot`(촬영 지시) is a filming
+    instruction the audience never sees, so it is not brand copy and is left
+    out of both the audit and the segment count.
+
+    Same delimiter-split-and-realign approach as `_guarded_x`, for the same
+    reason: one audit call for the whole script instead of one per line, and
+    a fallback to dictionary-only substitution if the model doesn't return
+    the segments intact.
+    """
+    result = write_shorts_script(note, caption_values, brand_kit, vendor)
+    scenes = result.get("scenes") or []
+    segments = [result.get("title", ""), result.get("hook", "")] + [
+        s.get("caption", "") for s in scenes
+    ]
+    if not any(seg.strip() for seg in segments) or not brand_kit.get("guardrail_enabled", True):
+        result["compliance"] = _compliance_summary({})
+        return result
+
+    joined = _SHORTS_DELIMITER.join(segments)
+    guarded = apply_guardrail_if_enabled(joined, brand_kit, vendor)
+    result["compliance"] = _compliance_summary(guarded)
+    parts = [p.strip() for p in guarded["final_text"].split(_SHORTS_DELIMITER.strip())]
+
+    if len(parts) == len(segments):
+        result["title"], result["hook"], *cut_captions = parts
+        for scene, caption in zip(scenes, cut_captions):
+            scene["caption"] = caption
+    else:
+        print(
+            f"[content_writer] Shorts guardrail returned {len(parts)} segments for "
+            f"{len(segments)} — keeping originals with dictionary substitution only."
+        )
+        blacklist = brand_kit.get("blacklist_map", {})
+        result["title"] = apply_blacklist_dictionary(result.get("title", ""), blacklist)[0]
+        result["hook"] = apply_blacklist_dictionary(result.get("hook", ""), blacklist)[0]
+        for scene in scenes:
+            scene["caption"] = apply_blacklist_dictionary(scene.get("caption", ""), blacklist)[0]
     return result
