@@ -220,7 +220,7 @@ def _has_violation_vocabulary(text: str) -> bool:
     return any(hint in text.lower() for hint in _VIOLATION_HINTS)
 
 
-def _looks_like_suggestion(text: str) -> bool:
+def _looks_like_suggestion(text: str, has_phrase: bool = True) -> bool:
     """Is this finding a recommendation rather than a violation?
 
     Only used as a backstop for a model that ignored the `suggestions` field.
@@ -230,10 +230,32 @@ def _looks_like_suggestion(text: str) -> bool:
     same — a suggestion treated as a violation wastes a regeneration, while a
     violation treated as a suggestion ships a 환경성 표시·광고 문제 to a live
     blog under the company's name.
+
+    `has_phrase=False` flips that priority. A 보자기 포장 draft was flagged
+    with no `phrase` at all for "기존에 인증받은 4개 품목과 별개의 서비스임을
+    명확히 하여 … 오인하지 않도록 안내하면 더욱 좋습니다" — preventive advice
+    about a mix-up that could happen, not a citation of a sentence that
+    already claims the certification. '오인' put it in the violation
+    vocabulary, so it forced compliance_pass=False and a 'regenerate'
+    verdict — for advice that, like every phrase-less finding, no
+    regeneration could ever resolve, because there was nothing wrong in the
+    text to begin with.
+
+    A finding that actually names a violating phrase almost always sets
+    `phrase`, since the whole point of citing one is to point at words that
+    exist. One that doesn't is more often describing a risk to watch for than
+    something already wrong, so for these the suggestion vocabulary is
+    checked first and the violation vocabulary override is skipped —
+    ambiguous phrase-less findings with neither still fall through to
+    `_classify_issues`'s existing default (open, since nothing can verify
+    otherwise).
     """
+    lowered = text.lower()
+    if not has_phrase:
+        return any(hint in lowered for hint in _SUGGESTION_HINTS)
     if _has_violation_vocabulary(text):
         return False
-    return any(hint in text.lower() for hint in _SUGGESTION_HINTS)
+    return any(hint in lowered for hint in _SUGGESTION_HINTS)
 
 
 def _classify_issues(raw_issues: List, reviewed_text: str) -> Tuple[List[str], List[str], Dict[str, str]]:
@@ -251,7 +273,7 @@ def _classify_issues(raw_issues: List, reviewed_text: str) -> Tuple[List[str], L
         phrase, text = _parse_issue(item)
         if not text:
             continue
-        if _looks_like_suggestion(text):
+        if _looks_like_suggestion(text, has_phrase=bool(phrase)):
             suggestions.append(text)
             continue
         if phrase:
