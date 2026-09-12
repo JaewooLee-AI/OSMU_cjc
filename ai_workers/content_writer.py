@@ -173,12 +173,25 @@ def _recommendation(report: Dict) -> Dict:
     #
     # 노출이 목표라서 더 중요합니다 — 네이버 DIA는 체류시간을 보고, 검색해서
     # 들어온 사람이 답을 못 찾고 나가면 그 신호가 순위를 도로 깎습니다.
+    # 순수 공지 글(공지 정보는 채웠는데 제품 정보는 안 채운 글)에서는 이 경고를
+    # 아예 띄우지 않습니다. 강사과정 공지 글이 SEO 타깃으로 '굿즈제작'을 물고
+    # 들어가면, 검색 의도 감사는 '이 글이 최소 제작 수량·단가·배송 기간에
+    # 답하는가'를 묻고 0%를 냈다 — 강사과정 공지에는 애초에 해당하지 않는
+    # 질문이다. 게다가 안내 문구는 그 항목을 🛍️ 제품·주문 정보에 채우라고
+    # 하는데, 공지 글에 제품 판매 정보를 채우라는 건 맥락에 안 맞는 지시다.
+    # 근본 원인(교육 키워드가 SEO 풀에 없어서 무관한 키워드가 타깃이 되는 것)은
+    # 풀 재구성으로 풀어야 하고, 여기서는 그 결과로 나온 오해의 소지가 있는
+    # 경고만 막는다.
+    is_pure_notice = bool((report.get("notice") or {}).get("checked")) and not bool(
+        (report.get("product") or {}).get("checked")
+    )
     intent = report.get("search_intent") or {}
     intent_coverage = intent.get("coverage")
     intent_gap = bool(
         intent.get("checked")
         and intent_coverage is not None
         and intent_coverage < INTENT_COVERAGE_FLOOR
+        and not is_pure_notice
     )
     fact_gaps = []
     for key, label in (("notice", "공지 정보"), ("product", "제품·주문 정보")):
