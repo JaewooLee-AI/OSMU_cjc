@@ -828,12 +828,30 @@ def _compliance_summary(guarded: dict) -> dict:
     … 인증을 받아') shipped in an Instagram caption during testing with the
     report showing nothing wrong, because nothing downstream of this function
     ever looked at `compliance_pass` or `llm_issues` for these two channels.
+
+    `llm_issues` (`grounded_issues` inside guardrail.py) is checked against
+    the *pre-correction* draft the audit read, not the corrected text it
+    returned — a finding is "grounded" simply because the model found it
+    somewhere in what it was given, which is trivially almost always true.
+    The Naver body has a dedicated re-check (`_quality_pass` stage 6b) that
+    reopens or resolves each finding against the text that actually ships;
+    without the same re-check here, a caption where the audit itself already
+    fixed '10년 동안' still reported "컴플라이언스 미해결" for a phrase that
+    was no longer anywhere in what got saved. Re-running that same check
+    against `guarded["final_text"]` here closes the gap.
     """
+    phrase_map = guarded.get("issue_phrases") or {}
+    shipped = (guarded.get("final_text") or "").lower()
+    still_open = [
+        issue for issue in (guarded.get("llm_issues") or [])
+        # 인용 문구가 없으면 검증할 수 없으니(설계상 늘 그렇듯) 미해결로 둡니다.
+        if not phrase_map.get(issue) or phrase_map[issue].lower() in shipped
+    ]
     return {
         "checked": guarded.get("compliance_pass") is not None,
-        "compliance_pass": guarded.get("compliance_pass"),
+        "compliance_pass": (not still_open) if guarded.get("compliance_pass") is not None else None,
         "score": guarded.get("score"),
-        "issues": list(guarded.get("llm_issues") or []),
+        "issues": still_open,
         "dictionary_hits": list(guarded.get("dictionary_hits") or []),
     }
 
