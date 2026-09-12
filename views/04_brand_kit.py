@@ -15,7 +15,7 @@ import pandas as pd
 import streamlit as st
 
 from ai_workers import content_mode, keyword_research
-from core import brand_seed, repo
+from core import repo
 from core.theme import palette_html
 
 st.title("브랜드 킷")
@@ -289,14 +289,4 @@ if history_count:
         if st.button("🗑️ 제목 이력 전체 삭제", key="clear_title_history"):
             repo.clear_title_history()
             st.rerun()
-
-st.divider()
-with st.expander("↩️ 회사 자료 기준값으로 되돌리기"):
-    st.caption(
-        "company_info/ PDF에서 추출한 초기값(core/brand_seed.py)으로 전체를 덮어씁니다. "
-        "직접 수정한 내용은 사라집니다."
-    )
-    if st.button("기준값으로 초기화"):
-        brand_seed.reset_to_seed()
-        st.success("초기값으로 되돌렸습니다.")
         st.rerun()

@@ -216,23 +216,3 @@ def seed_if_empty() -> bool:
         vision_quality="economy",
     )
     return True
-
-
-def reset_to_seed() -> None:
-    """Explicit admin action from the Brand Kit page — overwrite everything
-    back to the company-document defaults."""
-    repo.save_brand_kit(
-        brand_name=BRAND_NAME,
-        sub_brand=SUB_BRAND,
-        industry=INDUSTRY,
-        homepage=HOMEPAGE,
-        naver_blog_id=NAVER_BLOG_ID,
-        instagram_handle=INSTAGRAM_HANDLE,
-        persona=PERSONA,
-        tone_and_manner=TONE_AND_MANNER,
-        core_facts=CORE_FACTS,
-        terminology=TERMINOLOGY,
-        seo_keywords=SEO_KEYWORDS,
-        blacklist_map=BLACKLIST_MAP,
-        few_shot_samples=FEW_SHOT_SAMPLES,
-    )

@@ -7,6 +7,10 @@ data/
 company_info/
 company_info*.zip
 
+# 컨설팅 보고서·진단 문서·운영 매뉴얼 등 회사 내부 자료. 코드와 무관하고
+# 공개 저장소에 올릴 이유가 없습니다.
+etc/
+
 .venv/
 __pycache__/
 *.pyc
