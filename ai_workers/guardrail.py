@@ -145,7 +145,11 @@ def check_certification_scope(text: str, brand_kit: dict) -> List[dict]:
     return findings
 
 
-def _verified_facts_block(brand_kit: dict) -> str:
+def _verified_facts_block(
+    brand_kit: dict,
+    notice_fields: Optional[dict] = None,
+    product_fields: Optional[dict] = None,
+) -> str:
     """The only numbers and claims the audit may treat as true.
 
     Without this the audit has no ground truth, so it cannot tell a correct
@@ -159,13 +163,28 @@ def _verified_facts_block(brand_kit: dict) -> str:
     struck an approved claim about the founder's own teaching career out of the
     post. The founder's experience predates the company — the two numbers were
     never about the same thing.
+
+    notice_fields/product_fields belong here for the same reason, and their
+    absence cost two more real sentences. The marketer filled in this post's
+    price (1만원대) and lead time (2일 이내 발송) — exactly the facts
+    ai_workers/factsheet.py exists to protect from being invented — and the
+    audit, seeing numbers absent from *its* ground truth, treated them as
+    unverified: it deleted '2일 이내 발송' outright and rewrote '1만원대' up to
+    '5,000원부터 30,000원대까지' to match the brand's general price zone in
+    core_facts. Rule 6 of the audit prompt ("[검증된 사실]에 없거나 그와 다른
+    숫자가 나오면... 고치거나 숫자를 빼세요") was doing exactly what it says —
+    the campaign's own numbers just weren't in the block it was checking
+    against. They still need to outrank the brand-wide figures in core_facts
+    when the two disagree: core_facts describes what the brand generally
+    charges, this campaign's factsheet describes what this post promises, and
+    a promise trumps a generalization.
     """
     facts = [str(f).strip() for f in (brand_kit.get("core_facts") or []) if str(f).strip()]
     glossary = [
         f"{term}: {desc}" for term, desc in (brand_kit.get("terminology") or {}).items() if desc
     ]
     persona = (brand_kit.get("persona") or "").strip()
-    if not facts and not glossary and not persona:
+    if not facts and not glossary and not persona and not notice_fields and not product_fields:
         return ""
     lines = ["\n\n[검증된 사실 — 아래에 없는 수치·인증·실적은 근거 없는 것으로 취급하세요]"]
     lines += [f"- {f}" for f in facts]
@@ -176,6 +195,22 @@ def _verified_facts_block(brand_kit: dict) -> str:
             "이미 검증된 사실입니다. 이 내용과 일치하는 서술은 과장으로 지적하지 마세요]",
             f"- {persona}",
         ]
+
+    campaign_facts = []
+    if notice_fields or product_fields:
+        from ai_workers import factsheet
+
+        for sheet, given in ((factsheet.NOTICE, notice_fields), (factsheet.PRODUCT, product_fields)):
+            campaign_facts += [
+                f"- {sheet.labels[k]}: {v}" for k, v in factsheet.clean(sheet, given).items()
+            ]
+    if campaign_facts:
+        lines += [
+            "\n[이 글만의 사실 — 담당자가 이 캠페인을 위해 직접 입력한 값입니다. "
+            "위 회사 전반의 수치(core_facts)와 다르더라도 이쪽이 이 글에서는 맞는 값이니 "
+            "고치거나 삭제하지 마세요. 반대로 이 목록에 없는 가격·기간·수량을 새로 "
+            "지어내는 것은 여전히 위반입니다]",
+        ] + campaign_facts
     return "\n".join(lines)
 
 
@@ -309,14 +344,20 @@ def apply_blacklist_dictionary(text: str, blacklist_map: dict) -> Tuple[str, Lis
     return sanitized, hits
 
 
-def run_llm_audit(text: str, vendor: str, brand_kit: Optional[dict] = None) -> Dict:
+def run_llm_audit(
+    text: str,
+    vendor: str,
+    brand_kit: Optional[dict] = None,
+    notice_fields: Optional[dict] = None,
+    product_fields: Optional[dict] = None,
+) -> Dict:
     """Structured compliance report. Falls back to a conservative 'pass with
     no changes' if JSON parsing fails — an audit failure must never crash the
     pipeline or silently mangle the draft."""
     raw = generate_text(
         vendor=vendor,
         prompt=text,
-        system=AUDIT_SYSTEM_PROMPT + _verified_facts_block(brand_kit or {}),
+        system=AUDIT_SYSTEM_PROMPT + _verified_facts_block(brand_kit or {}, notice_fields, product_fields),
         max_tokens=2500,
         note="guardrail-audit",
     )
@@ -357,9 +398,15 @@ def run_llm_audit(text: str, vendor: str, brand_kit: Optional[dict] = None) -> D
         }
 
 
-def review_and_sanitize(text: str, brand_kit: dict, vendor: str) -> Dict:
+def review_and_sanitize(
+    text: str,
+    brand_kit: dict,
+    vendor: str,
+    notice_fields: Optional[dict] = None,
+    product_fields: Optional[dict] = None,
+) -> Dict:
     dict_sanitized, dictionary_hits = apply_blacklist_dictionary(text, brand_kit.get("blacklist_map", {}))
-    audit = run_llm_audit(dict_sanitized, vendor, brand_kit)
+    audit = run_llm_audit(dict_sanitized, vendor, brand_kit, notice_fields, product_fields)
 
     # Checked against the text the audit *returns*, not the text it read: if
     # corrected_text already narrowed the over-broad sentence, there is
@@ -392,7 +439,13 @@ def review_and_sanitize(text: str, brand_kit: dict, vendor: str) -> Dict:
     }
 
 
-def apply_guardrail_if_enabled(text: str, brand_kit: dict, vendor: str) -> Dict:
+def apply_guardrail_if_enabled(
+    text: str,
+    brand_kit: dict,
+    vendor: str,
+    notice_fields: Optional[dict] = None,
+    product_fields: Optional[dict] = None,
+) -> Dict:
     """Returns a report dict even when disabled, so callers always have a
     consistent shape to persist (compliance_pass=None means 'skipped')."""
     if not brand_kit.get("guardrail_enabled", True):
@@ -401,4 +454,4 @@ def apply_guardrail_if_enabled(text: str, brand_kit: dict, vendor: str) -> Dict:
             "dictionary_hits": [], "llm_issues": [], "unverified_issues": [], "suggestions": [],
             "issue_phrases": {}, "cert_scope_issues": [],
         }
-    return review_and_sanitize(text, brand_kit, vendor)
+    return review_and_sanitize(text, brand_kit, vendor, notice_fields, product_fields)

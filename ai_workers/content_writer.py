@@ -242,7 +242,7 @@ def _quality_pass(
     # --- stage 3: compliance guardrail ---
     if brand_kit.get("guardrail_enabled", True):
         _report(progress, "환경성 표시·광고 컴플라이언스 검수 중…")
-    report = apply_guardrail_if_enabled(draft, brand_kit, vendor)
+    report = apply_guardrail_if_enabled(draft, brand_kit, vendor, notice_fields, product_fields)
     report["search_intent"] = intent_report
     report["final_text"] = ensure_image_tags_preserved(draft, report["final_text"])
 
@@ -265,7 +265,7 @@ def _quality_pass(
     regressed = [p for p in flagged_phrases if p and p.lower() in final_content.lower()]
     if regressed:
         _report(progress, "SEO 보정이 되살린 컴플라이언스 문구 재검수 중…")
-        reguard = apply_guardrail_if_enabled(final_content, brand_kit, vendor)
+        reguard = apply_guardrail_if_enabled(final_content, brand_kit, vendor, notice_fields, product_fields)
         final_content = ensure_image_tags_preserved(final_content, reguard["final_text"])
         report["llm_issues"] = list(dict.fromkeys((report.get("llm_issues") or []) + reguard["llm_issues"]))
         report["issue_phrases"] = {**report.get("issue_phrases", {}), **reguard.get("issue_phrases", {})}
@@ -581,17 +581,23 @@ def run_pipeline(campaign_id: str, progress: Progress = None) -> Dict:
 
         instagram = _safe(
             progress, "인스타그램 캡션 생성 중…",
-            lambda: _guarded_instagram(seed_note, caption_values, brand_kit, vendor),
+            lambda: _guarded_instagram(
+                seed_note, caption_values, brand_kit, vendor, notice_fields, product_fields
+            ),
             {"caption": "", "hashtags": []},
         )
         x_result = _safe(
             progress, "X 스레드 생성 중…",
-            lambda: _guarded_x(seed_note, caption_values, brand_kit, vendor),
+            lambda: _guarded_x(
+                seed_note, caption_values, brand_kit, vendor, notice_fields, product_fields
+            ),
             {"tweets": [], "hashtags": []},
         )
         shorts = _safe(
             progress, "쇼츠 구성안 생성 중…",
-            lambda: _guarded_shorts(seed_note, caption_values, brand_kit, vendor),
+            lambda: _guarded_shorts(
+                seed_note, caption_values, brand_kit, vendor, notice_fields, product_fields
+            ),
             {"title": "", "hook": "", "scenes": [], "hashtags": []},
         )
         naver_hashtags = _safe(
@@ -856,13 +862,18 @@ def _compliance_summary(guarded: dict) -> dict:
     }
 
 
-def _guarded_instagram(note: str, caption_values: List[str], brand_kit: dict, vendor: str) -> dict:
+def _guarded_instagram(
+    note: str, caption_values: List[str], brand_kit: dict, vendor: str,
+    notice_fields: Optional[dict] = None, product_fields: Optional[dict] = None,
+) -> dict:
     """The caption goes through the same compliance guardrail as the Naver
     body — it's separately generated text making its own claims about the
     brand, not a derivative of the audited body, so skipping it would leave a
     real compliance gap."""
     result = write_instagram_caption(note, caption_values, brand_kit, vendor)
-    guarded = apply_guardrail_if_enabled(result["caption"], brand_kit, vendor)
+    guarded = apply_guardrail_if_enabled(
+        result["caption"], brand_kit, vendor, notice_fields, product_fields
+    )
     result["caption"] = guarded["final_text"]
     result["compliance"] = _compliance_summary(guarded)
     return result
@@ -871,7 +882,10 @@ def _guarded_instagram(note: str, caption_values: List[str], brand_kit: dict, ve
 _TWEET_DELIMITER = "\n<<<TWEET>>>\n"
 
 
-def _guarded_x(note: str, caption_values: List[str], brand_kit: dict, vendor: str) -> dict:
+def _guarded_x(
+    note: str, caption_values: List[str], brand_kit: dict, vendor: str,
+    notice_fields: Optional[dict] = None, product_fields: Optional[dict] = None,
+) -> dict:
     """Same reasoning as the Instagram block: X gets its own generated text
     making brand claims, so it gets the same audit.
 
@@ -891,7 +905,7 @@ def _guarded_x(note: str, caption_values: List[str], brand_kit: dict, vendor: st
         return result
 
     joined = _TWEET_DELIMITER.join(tweets)
-    guarded = apply_guardrail_if_enabled(joined, brand_kit, vendor)
+    guarded = apply_guardrail_if_enabled(joined, brand_kit, vendor, notice_fields, product_fields)
     result["compliance"] = _compliance_summary(guarded)
     guarded_text = guarded["final_text"]
     parts = [p.strip() for p in guarded_text.split(_TWEET_DELIMITER.strip())]
@@ -913,7 +927,10 @@ def _guarded_x(note: str, caption_values: List[str], brand_kit: dict, vendor: st
 _SHORTS_DELIMITER = "\n<<<SEG>>>\n"
 
 
-def _guarded_shorts(note: str, caption_values: List[str], brand_kit: dict, vendor: str) -> dict:
+def _guarded_shorts(
+    note: str, caption_values: List[str], brand_kit: dict, vendor: str,
+    notice_fields: Optional[dict] = None, product_fields: Optional[dict] = None,
+) -> dict:
     """Same audit as Instagram/X, applied last — this channel had none at all.
 
     Only the title, hook and on-screen captions are audited: those are the
@@ -937,7 +954,7 @@ def _guarded_shorts(note: str, caption_values: List[str], brand_kit: dict, vendo
         return result
 
     joined = _SHORTS_DELIMITER.join(segments)
-    guarded = apply_guardrail_if_enabled(joined, brand_kit, vendor)
+    guarded = apply_guardrail_if_enabled(joined, brand_kit, vendor, notice_fields, product_fields)
     result["compliance"] = _compliance_summary(guarded)
     parts = [p.strip() for p in guarded["final_text"].split(_SHORTS_DELIMITER.strip())]
 
