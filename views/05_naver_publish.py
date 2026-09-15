@@ -9,7 +9,9 @@ can't be driven at all, so the generated tags are shown here to copy.
 from __future__ import annotations
 
 import streamlit as st
+import streamlit.components.v1 as components
 
+import simulators
 from ai_workers.naver_publisher import (
     clear_naver_session,
     naver_session_exists,
@@ -116,6 +118,19 @@ def _render_publish_error(campaign: dict) -> None:
             st.code(detail, language=None)
 
 
+def _render_content_preview(campaign: dict, key_prefix: str) -> None:
+    """네이버에 실제로 붙여넣어질 모습 그대로 보여줍니다.
+
+    워크벤치의 시뮬레이터와 같은 렌더러를 씁니다 — 컴플라이언스 리포트·SEO
+    지표·생성 로그 같은 담당자용 정보는 여기 전혀 없습니다. 제목·사진·본문,
+    그리고 발행 시 함께 붙여넣을 해시태그만 보이는 '독자가 보게 될 화면'
+    그대로입니다.
+    """
+    with st.expander("📄 본문 보기"):
+        html = simulators.render("naver", campaign, brand_kit=brand_kit)
+        components.html(html, height=simulators.height("naver"), scrolling=True)
+
+
 pending = repo.list_campaigns(statuses=["ready_to_publish"])
 # "게시 완료"는 브라우저에 제목·본문·사진을 모두 붙여넣었다는 뜻입니다. 담당자가 네이버
 # 에디터의 [발행]을 실제로 눌렀는지는 외부 브라우저 창 안의 클릭이라 이 앱이 알 수
@@ -136,7 +151,10 @@ with tab_pending:
             icon = "📰" if c["source_type"] == "news" else "✍️"
             st.markdown(f"**{icon} {c.get('title') or '(제목 없음)'}**")
             st.caption(f"업데이트: {c.get('updated_at', '')} · 사진 {len(c.get('storage_file_paths') or [])}장")
+            if c.get("source_url"):
+                st.caption(f"📰 원문: {c['source_url']}")
             _render_publish_error(c)
+            _render_content_preview(c, "pending")
             hashtags = c.get("naver_hashtags") or []
             if hashtags:
                 st.caption("🏷️ 태그는 자동으로 입력되지 않습니다. 아래를 복사해 [발행] 창의 태그 칸에 붙여넣어 주세요.")
@@ -155,5 +173,12 @@ with tab_published:
         with st.container(border=True):
             st.markdown(f"**{c.get('title') or '(제목 없음)'}**")
             st.caption(f"게시: {c.get('updated_at', '')}")
+            if c.get("source_url"):
+                st.caption(f"📰 원문: {c['source_url']}")
             _render_publish_error(c)
+            _render_content_preview(c, "published")
+            hashtags = c.get("naver_hashtags") or []
+            if hashtags:
+                st.caption("🏷️ [발행] 창 태그 칸에 붙여넣을 해시태그")
+                st.code(" ".join(hashtags), language=None)
             _card_actions(c, "published", "🔁 다시 게시")

@@ -300,11 +300,6 @@ def _quality_pass(
     final_content = ensure_all_photos_tagged(final_content, storage_file_paths)
     final_content = strip_unresolvable_image_tags(final_content, storage_file_paths)
 
-    if is_news and source_url:
-        # Deterministic append, after every rewrite pass — a citation footer
-        # shouldn't have to survive multiple LLM rewrites the way `[IMAGE:]`
-        # tags do (and those have a backstop for exactly that).
-        final_content = f"{final_content.rstrip()}\n\n[원문 기사 출처: {source_url}]"
 
     # --- stage 6b: resolve issues already fixed in the text that ships ---
     # `llm_issues` records what each guardrail pass found in *its own* input —
