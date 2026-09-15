@@ -197,6 +197,33 @@ def delete_campaign(campaign_id: str) -> None:
         conn.execute("delete from campaigns where id = ?", (campaign_id,))
 
 
+def reset_generated_content() -> Dict[str, int]:
+    """Deletes every campaign, its uploaded-photo records, and the title-
+    repetition memory — everything 워크벤치/뉴스 큐레이션/네이버 게시 produce.
+
+    Brand kit, LLM/네이버 API keys, and the keyword/vision caches are
+    configuration and infrastructure, not generated content, and are
+    deliberately left untouched — this is the counterpart to the brand-kit
+    page's now-removed '기준값으로 되돌리기', scoped to content instead of
+    settings so it can't silently erase tuning work the way that button did.
+
+    Asset *rows* are cleared here; the files backing them live under
+    data/assets and are removed separately by core.storage.clear_all(), which
+    the caller is expected to run alongside this — kept apart because one is
+    a DB operation and the other touches the filesystem.
+    """
+    with get_conn() as conn:
+        counts = {
+            "campaigns": conn.execute("select count(*) as n from campaigns").fetchone()["n"],
+            "assets": conn.execute("select count(*) as n from assets").fetchone()["n"],
+            "titles": conn.execute("select count(*) as n from title_history").fetchone()["n"],
+        }
+        conn.execute("delete from campaigns")
+        conn.execute("delete from assets")
+        conn.execute("delete from title_history")
+    return counts
+
+
 # --- title history ----------------------------------------------------------
 # Outlives the campaigns it came from — see the schema comment in core/db.py.
 

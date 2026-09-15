@@ -80,3 +80,42 @@ if failed:
 st.divider()
 if st.button("🔄 새로고침"):
     st.rerun()
+
+st.divider()
+with st.expander("⚠️ 콘텐츠 초기화"):
+    st.caption(
+        "워크벤치·뉴스 큐레이션·네이버 게시로 만들어진 것만 지웁니다 — 캠페인(초안·인스타/X/쇼츠·"
+        "컴플라이언스 리포트), 업로드한 사진, 제목 반복 방지 이력. **브랜드 킷, API 키, LLM 설정, "
+        "키워드·이미지 분석 캐시는 그대로 남습니다.**"
+    )
+    st.markdown(
+        f"- 캠페인 **{len(campaigns)}건**\n"
+        f"- 업로드 사진 **{file_count}장** ({total_bytes / 1_048_576:.1f}MB)\n"
+        f"- 제목 이력 **{repo.title_history_count()}건**"
+    )
+
+    if "confirm_content_reset" not in st.session_state:
+        st.session_state["confirm_content_reset"] = False
+
+    if not st.session_state["confirm_content_reset"]:
+        if st.button("🗑️ 콘텐츠 초기화", key="ask_content_reset"):
+            st.session_state["confirm_content_reset"] = True
+            st.rerun()
+    else:
+        st.warning(
+            "정말 삭제할까요? **되돌릴 수 없습니다.** 위에 적힌 캠페인·사진·제목 이력이 "
+            "전부 사라집니다."
+        )
+        c1, c2 = st.columns(2)
+        if c1.button("네, 초기화합니다", key="confirm_content_reset_btn", type="primary"):
+            removed = repo.reset_generated_content()
+            files_removed = storage.clear_all()
+            st.session_state["confirm_content_reset"] = False
+            st.success(
+                f"초기화했습니다 — 캠페인 {removed['campaigns']}건, 사진 {files_removed}장, "
+                f"제목 이력 {removed['titles']}건 삭제됨."
+            )
+            st.rerun()
+        if c2.button("취소", key="cancel_content_reset"):
+            st.session_state["confirm_content_reset"] = False
+            st.rerun()

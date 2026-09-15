@@ -151,3 +151,28 @@ def storage_usage() -> Tuple[int, int]:
         return 0, 0
     files = [p for p in ASSETS_DIR.rglob("*") if p.is_file()]
     return len(files), sum(p.stat().st_size for p in files)
+
+
+def clear_all() -> int:
+    """Deletes every uploaded photo on disk. Only ASSETS_DIR (data/assets) is
+    touched — data/osmu.db, data/.master_key and data/naver_state.json live
+    one level up and are never in scope here.
+
+    Paired with repo.reset_generated_content(), which clears the matching DB
+    rows: once campaigns are gone nothing references these files, and the
+    dashboard's "게시 완료 · N장 · M MB" card would keep counting orphaned
+    bytes forever otherwise.
+    """
+    if not ASSETS_DIR.exists():
+        return 0
+    files = [p for p in ASSETS_DIR.rglob("*") if p.is_file()]
+    for f in files:
+        f.unlink(missing_ok=True)
+    # 비어버린 날짜별 하위 폴더(예: 202609/)도 정리합니다. 깊은 것부터 지워야
+    # 부모 폴더를 비우고 지울 수 있어 역순으로 순회합니다.
+    for d in sorted((p for p in ASSETS_DIR.rglob("*") if p.is_dir()), reverse=True):
+        try:
+            d.rmdir()
+        except OSError:
+            pass  # 아직 파일이 남아 있으면(예상 밖 파일) 건드리지 않습니다.
+    return len(files)
