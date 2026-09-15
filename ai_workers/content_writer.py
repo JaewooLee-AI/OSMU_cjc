@@ -300,6 +300,14 @@ def _quality_pass(
     final_content = ensure_all_photos_tagged(final_content, storage_file_paths)
     final_content = strip_unresolvable_image_tags(final_content, storage_file_paths)
 
+    if is_news and source_url:
+        # 뉴스 큐레이션에서 온 글은 원문 기사 링크가 본문에 반드시 있어야 합니다
+        # (편집 방침) — 워크벤치에서 직접 쓴 글은 source_url 자체가 없어 이 블록을
+        # 타지 않으므로 애초에 링크가 붙지 않습니다. 다른 재작성 단계를 전부
+        # 거친 뒤 결정론적으로 붙입니다 — 각주가 LLM 재작성 여러 번을 [IMAGE:]
+        # 태그처럼 버텨낼 필요가 없게 하기 위해서입니다.
+        final_content = f"{final_content.rstrip()}\n\n[원문 기사 출처: {source_url}]"
+
 
     # --- stage 6b: resolve issues already fixed in the text that ships ---
     # `llm_issues` records what each guardrail pass found in *its own* input —
