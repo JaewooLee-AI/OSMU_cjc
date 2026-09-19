@@ -15,6 +15,13 @@ on:
       - ".github/workflows/spike-flet-playwright-windows.yml"
   workflow_dispatch:
 
+env:
+  # Without these, `flet build`'s rich-console progress output tries to print
+  # a checkmark emoji through the Windows runner's default cp1252 console
+  # codepage and dies with UnicodeEncodeError before the build even starts.
+  PYTHONUTF8: "1"
+  FLET_CLI_NO_RICH_OUTPUT: "1"
+
 jobs:
   build-and-run:
     runs-on: windows-latest
