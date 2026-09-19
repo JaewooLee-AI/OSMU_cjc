@@ -1,0 +1,85 @@
+name: spike-flet-playwright-windows
+
+# Throwaway verification build — NOT part of the OSMU app. Confirms two open
+# questions from the Flet migration review before real work starts:
+#   1. Does `flet build windows` produce an exe where Playwright can still
+#      launch a browser (via system Chrome, same as ai_workers/naver_publisher.py)?
+#   2. Does a from-scratch Windows CF_HTML clipboard write/read round-trip
+#      correctly (core/clipboard_utils.py only handles macOS today)?
+# See spike_flet/README.md.
+
+on:
+  push:
+    paths:
+      - "spike_flet/**"
+      - ".github/workflows/spike-flet-playwright-windows.yml"
+  workflow_dispatch:
+
+jobs:
+  build-and-run:
+    runs-on: windows-latest
+    defaults:
+      run:
+        working-directory: spike_flet
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install "flet>=0.28.0" "playwright>=1.46" pywin32
+
+      - name: Download Playwright's Chromium fallback + driver
+        # PLAYWRIGHT_BROWSERS_PATH=0 stores the browser next to the driver
+        # inside the playwright package itself (the documented pattern for
+        # bundling with PyInstaller) rather than a global user cache — the
+        # theory being that anything living inside site-packages is more
+        # likely to survive flet build's packaging step. Whether it actually
+        # does is an open question this workflow settles either way, since
+        # playwright_check.py exercises channel="chrome" first regardless.
+        env:
+          PLAYWRIGHT_BROWSERS_PATH: "0"
+        run: playwright install chromium
+
+      - name: flet build windows
+        run: flet build windows --yes --verbose
+
+      - name: Run packaged exe and capture results
+        shell: pwsh
+        run: |
+          $exe = Get-ChildItem -Path "build/windows" -Filter "*.exe" -Recurse | Select-Object -First 1
+          if (-not $exe) { throw "No .exe found under build/windows — flet build produced no executable." }
+          Write-Host "Running $($exe.FullName)"
+
+          $proc = Start-Process -FilePath $exe.FullName -WorkingDirectory $exe.DirectoryName -PassThru
+          Start-Sleep -Seconds 20
+          if (-not $proc.HasExited) {
+            Write-Host "Process still running after 20s — killing it."
+            Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue
+          }
+
+          $resultsPath = Join-Path $exe.DirectoryName "results.txt"
+          if (-not (Test-Path $resultsPath)) {
+            throw "results.txt was not created — the app likely crashed before running its checks."
+          }
+
+          $content = Get-Content $resultsPath -Raw
+          Write-Host "----- results.txt -----"
+          Write-Host $content
+          Write-Host "------------------------"
+
+          if ($content -match "FAIL") {
+            throw "One or more spike checks FAILED — see results.txt content above."
+          }
+
+      - name: Upload build artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: spike-flet-windows-build
+          path: spike_flet/build/windows
+          if-no-files-found: ignore

@@ -13,6 +13,7 @@ etc/
 
 .venv/
 __pycache__/
+spike_flet/build/
 *.pyc
 .env
 .DS_Store

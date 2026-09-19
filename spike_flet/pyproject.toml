@@ -1,0 +1,15 @@
+[project]
+name = "spike-flet-playwright"
+version = "0.1.0"
+description = "Throwaway spike: does `flet build windows` produce an exe where Playwright can still launch a browser, and does a Windows CF_HTML clipboard write/read round-trip? Not part of the OSMU app — see README.md."
+requires-python = ">=3.10"
+dependencies = [
+    "flet>=0.28.0",
+    "playwright>=1.46",
+    "pywin32; platform_system == 'Windows'",
+]
+
+[tool.flet]
+product = "OSMU Flet Spike"
+org = "cjc"
+company = "cjc"
