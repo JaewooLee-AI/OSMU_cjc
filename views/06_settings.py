@@ -23,6 +23,21 @@ tab_llm, tab_naver, tab_vision, tab_usage = st.tabs(
 )
 
 
+def _saved_badge(encrypted_blob: str, updated_at: str | None = None) -> str:
+    """Unmistakable 'saved' indicator: masked fingerprint + timestamp.
+
+    Password inputs always render empty after a save (by design — the key
+    is never echoed back), which reads as 'not saved'. This badge proves
+    the row exists, which key it is (last 4 chars), and when it was stored.
+    """
+    try:
+        fingerprint = decrypt_api_key(encrypted_blob)[-4:]
+    except Exception:
+        fingerprint = "????"
+    when = f" · {updated_at} 저장" if updated_at else ""
+    return f"✅ 등록됨 `****{fingerprint}`{when}"
+
+
 # ---------------------------------------------------------------- LLM vendors
 with tab_llm:
     st.caption("입력한 키는 AES-256-GCM으로 암호화되어 로컬 SQLite에 저장됩니다. 마스터 키는 data/.master_key (0600).")
@@ -44,7 +59,7 @@ with tab_llm:
                     placeholder="저장된 키가 있으면 비워두고 테스트해도 유지됩니다" if saved else "",
                 )
                 if saved:
-                    st.caption("✅ 등록된 키가 있습니다.")
+                    st.caption(_saved_badge(saved["encrypted_api_key"], saved.get("updated_at")))
 
                 delete_clicked = False
                 if saved:
@@ -191,6 +206,7 @@ with tab_naver:
     )
 
     if naver_saved:
+        st.caption(_saved_badge(naver_saved["encrypted_client_secret"], naver_saved.get("updated_at")))
         used = repo.naver_calls_today()
         m1, m2, m3 = st.columns(3)
         m1.markdown(stat_card("오늘 호출", f"{used:,}", f"상한 {cap:,}" if cap else "상한 없음"),
@@ -256,6 +272,8 @@ with tab_naver:
             """
         )
     ad_saved = repo.get_searchad_settings()
+    if ad_saved:
+        st.caption(_saved_badge(ad_saved["encrypted_secret_key"], ad_saved.get("updated_at")))
     a1, a2, a3 = st.columns(3)
     ad_cid = a1.text_input("CUSTOMER_ID", key="ad_cid", placeholder="저장됨" if ad_saved else "7자리 숫자")
     ad_key = a2.text_input("액세스라이선스", type="password", key="ad_key",
@@ -302,9 +320,12 @@ with tab_naver:
     pool = repo.get_brand_kit().get("seo_keywords") or []
     freshness = keyword_research.pool_freshness(pool) if pool else None
 
-    if not naver_saved or not ad_saved:
-        st.warning("위에서 **두 API 키를 모두 등록**해야 키워드 갱신을 할 수 있습니다.", icon="🔑")
-    else:
+    # 키가 없어도 아래 기능 골격은 보여주고 실행 버튼만 잠급니다 —
+    # 통째로 숨기면 기능 자체가 없는 것처럼 보이기 때문입니다.
+    keys_ok = bool(naver_saved and ad_saved)
+    if not keys_ok:
+        st.warning("위에서 **두 API 키를 모두 등록**하면 아래 버튼이 활성화됩니다.", icon="🔑")
+    if True:
         # --- 지금 상태 한 줄 ------------------------------------------------
         if not pool:
             st.info("브랜드 킷에 SEO 키워드가 없습니다. 아래 갱신을 한 번 돌리면 채워집니다.")
@@ -332,7 +353,7 @@ with tab_naver:
                 f"🔄 숫자만 새로 재기 ({need}회 호출)" if need
                 else "🔄 숫자만 새로 재기 (전부 최신 · 0회)"
             )
-            if r1.button(label, key="pool_refresh", disabled=not need):
+            if r1.button(label, key="pool_refresh", disabled=(not need or not keys_ok)):
                 try:
                     with st.spinner(f"{need}개 재측정 중…"):
                         result = keyword_research.refresh_pool(pool)
@@ -375,19 +396,23 @@ with tab_naver:
             Callbacks execute ahead of the rerun, so this is the one place the
             box can be set programmatically.
             """
-            suggested = keyword_curator.suggest_seeds()
+            try:
+                suggested = keyword_curator.suggest_seeds()
+            except Exception as exc:
+                st.session_state["kw_seed_error"] = f"추천 실패: {exc}"
+                return
             if suggested:
                 st.session_state["kw_seed_box"] = ", ".join(suggested)
                 st.session_state.pop("kw_seed_error", None)
             else:
-                st.session_state["kw_seed_error"] = "추천에 실패했습니다. 직접 입력해주세요."
+                st.session_state["kw_seed_error"] = "추천 결과가 비어 있습니다. 직접 입력해주세요."
 
         z1, z2 = st.columns([3, 1])
         seed = z1.text_input(
             "씨앗 키워드 (쉼표로 최대 5개)",
             key="kw_seed_box",
-            help="브랜드 이름이 아니라 네이버에서 실제로 검색되는 일반적인 말이어야 합니다. "
-                 "'더봄봄'처럼 검색량이 없는 말에는 연관키워드가 없습니다.",
+             help="브랜드 이름이 아니라 네이버에서 실제로 검색되는 일반적인 말이어야 합니다. "
+                  "'키노피스'처럼 검색량이 없는 말에는 연관키워드가 없습니다.",
         )
         with z2:
             st.write("")
@@ -446,7 +471,7 @@ with tab_naver:
                 st.rerun()
 
         # --- 1단계: 후보 찾기 (무료) -----------------------------------------
-        if st.button("🔎 1단계 · 후보 찾기 (무료)", key="sw_find", type="primary"):
+        if st.button("🔎 1단계 · 후보 찾기 (무료)", key="sw_find", type="primary", disabled=not keys_ok):
             seeds = [s for s in seed.split(",") if s.strip()]
             if not seeds:
                 st.error("씨앗 키워드를 채우세요. [🪄 브랜드에서 추천]을 눌러도 됩니다.")
@@ -484,7 +509,7 @@ with tab_naver:
                 )
 
                 # --- 2단계: 경쟁도 조사 (유료) --------------------------------
-                if st.button(f"💳 2단계 · 경쟁도 조사 ({cost}회 사용)", key="sw_score", type="primary"):
+                if st.button(f"💳 2단계 · 경쟁도 조사 ({cost}회 사용)", key="sw_score", type="primary", disabled=not keys_ok):
                     try:
                         with st.spinner("블로그 경쟁 문서 수 조회 중…"):
                             scored = keyword_research.score_candidates(candidates, limit=int(cap_n))
@@ -502,10 +527,10 @@ with tab_naver:
             with st.expander(f"조사 결과 {len(scored)}개 보기"):
                 df = pd.DataFrame(scored)[["keyword", "estimated_volume", "documents", "score"]]
                 df.columns = ["키워드", "월간 검색량", "블로그 문서 수", "점수"]
-                st.dataframe(df, width='stretch', hide_index=True)
+                st.dataframe(df, use_container_width=True, hide_index=True)
 
             # --- 3단계: 브랜드 판정 -------------------------------------------
-            if st.button("🤖 3단계 · 브랜드에 맞는 것만 고르기", key="cu_propose", type="primary"):
+            if st.button("🤖 3단계 · 브랜드에 맞는 것만 고르기", key="cu_propose", type="primary", disabled=not keys_ok):
                 with st.spinner("브랜드 기준으로 판정 중…"):
                     result = keyword_curator.propose(scored, current=pool)
                 repo.set_app_state(SWEEP_STATE, {**saved_sweep, "stage": 3, "proposal": result})
@@ -591,7 +616,7 @@ with tab_naver:
                     "이어서 경쟁도 측정까지 끝납니다."
                 )
                 a1, a2 = st.columns([1, 3])
-                if a1.button("✅ 4단계 · 적용", key="cu_apply", type="primary"):
+                if a1.button("✅ 4단계 · 적용", key="cu_apply", type="primary", disabled=not keys_ok):
                     with st.spinner("브랜드 킷 반영 후 측정 중…"):
                         applied = keyword_curator.apply_and_measure(final, proposal)
                     repo.clear_app_state(SWEEP_STATE)
@@ -628,7 +653,7 @@ with tab_naver:
                             ["keyword", "estimated_volume", "demand", "documents", "score"]
                         ]
                         df.columns = ["키워드", "월간 검색량", "트렌드(상대)", "블로그 문서 수", "점수"]
-                        st.dataframe(df, width='stretch', hide_index=True)
+                        st.dataframe(df, use_container_width=True, hide_index=True)
                         st.caption("점수가 높을수록 '찾는 사람은 많은데 경쟁 글은 적은' 키워드입니다.")
 
 # ------------------------------------------------------------- vision / tokens
@@ -700,7 +725,7 @@ with tab_vision:
             row[f"{preset['label']} ({edge}px)"] = vision.estimate_image_tokens(vendor, edge, edge)
         row["원본 3024x4032 (미축소)"] = vision.estimate_image_tokens("google" if vendor == "google" else vendor, 3024, 4032)
         rows.append(row)
-    st.dataframe(pd.DataFrame(rows), width='stretch', hide_index=True)
+    st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
     st.caption(
         "'원본' 열은 축소 없이 폰 사진을 그대로 보냈을 때입니다. OpenAI는 detail=low가 해상도와 무관하게 "
         "고정 과금이라 값이 같습니다."
@@ -712,7 +737,7 @@ with tab_vision:
     col_a.markdown(stat_card("캐시된 사진 캡션", f"{cached_count:,}", "재사용 시 추가 토큰 0"), unsafe_allow_html=True)
     with col_b:
         st.write("")
-        if st.button("🧹 캐시 비우기", width='stretch'):
+        if st.button("🧹 캐시 비우기", use_container_width=True):
             removed = repo.clear_vision_cache()
             st.success(f"{removed}건을 삭제했습니다.")
             st.rerun()
@@ -755,6 +780,6 @@ with tab_usage:
              "est_saved_tokens", "note"]
         ]
         df.columns = ["시각", "종류", "벤더", "모델", "사진", "입력", "출력", "절약", "메모"]
-        st.dataframe(df, width='stretch', hide_index=True)
+        st.dataframe(df, use_container_width=True, hide_index=True)
     else:
         st.caption("아직 호출 기록이 없습니다.")

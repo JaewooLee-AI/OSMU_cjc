@@ -31,7 +31,7 @@ CSS = """
 .naver-mobile .naver-title { font-size: 24px; padding-bottom: 18px; margin-bottom: 20px; }
 .naver-meta { display: flex; align-items: center; gap: 12px; margin-bottom: 44px; }
 .naver-avatar { width: 44px; height: 44px; border-radius: 50%;
-    background: linear-gradient(135deg, #A6224B, #C9A227); flex-shrink: 0; }
+    background: linear-gradient(135deg, #1B3A5C, #C9A227); flex-shrink: 0; }
 .naver-meta-name { font-size: 15px; font-weight: 700; color: #222; }
 .naver-meta-sub { font-size: 13px; color: #888; }
 .naver-body p {
@@ -50,7 +50,7 @@ CSS = """
 """
 
 
-def render(campaign: dict, is_mobile: bool = False, blog_name: str = "더봄봄 공식 블로그") -> str:
+def render(campaign: dict, is_mobile: bool = False, blog_name: str = "키노피스 공식 블로그") -> str:
     title = campaign.get("title") or "(제목 없음)"
     content = campaign.get("content") or ""
     attached = campaign.get("storage_file_paths") or []

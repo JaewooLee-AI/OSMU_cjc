@@ -14,7 +14,7 @@ channels are real and worth keeping explicit:
 Brand Kit data is injected *in full* every time rather than retrieved by
 similarity search. For a glossary of 14 terms and a fact list of 15 lines
 that is both cheaper and more reliable than embedding + pgvector lookup: the
-whole corpus costs ~600 tokens, and a retrieval miss on "더봄봄" would silently
+whole corpus costs ~600 tokens, and a retrieval miss on "키노피스" would silently
 produce a draft that misspells the brand's own product names.
 """
 from __future__ import annotations

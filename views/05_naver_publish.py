@@ -31,7 +31,7 @@ brand_kit = repo.get_brand_kit()
 naver_blog_id = (brand_kit.get("naver_blog_id") or "").strip()
 
 def _login_prompt() -> None:
-    if st.button("🔓 네이버 로그인", disabled=not naver_blog_id, width='stretch'):
+    if st.button("🔓 네이버 로그인", disabled=not naver_blog_id, use_container_width=True):
         with st.spinner("Chrome 창에서 네이버 로그인을 완료해주세요 (최대 2분 대기)…"):
             result = open_naver_login_session(naver_blog_id)
         st.success(result["message"]) if result["success"] else st.error(result["message"])
@@ -46,7 +46,7 @@ if naver_session_exists():
     status_col, logout_col = st.columns([4, 1])
     status_col.success(f"🔑 네이버 로그인됨 (blog.naver.com/{naver_blog_id})")
     with logout_col:
-        if st.button("🧹 로그아웃", width='stretch'):
+        if st.button("🧹 로그아웃", use_container_width=True):
             clear_naver_session()
             st.rerun()
 else:
@@ -94,12 +94,12 @@ def _card_actions(
 
     if st.session_state.get(state_key):
         left, right, note = st.columns([1, 1, 3])
-        if left.button("🗑️ 삭제 확인", key=f"{state_key}_yes", type="primary", width='stretch'):
+        if left.button("🗑️ 삭제 확인", key=f"{state_key}_yes", type="primary", use_container_width=True):
             repo.delete_campaign(campaign_id)
             st.session_state.pop(state_key, None)
             st.toast("삭제했습니다.")
             st.rerun()
-        if right.button("취소", key=f"{state_key}_no", width='stretch'):
+        if right.button("취소", key=f"{state_key}_no", use_container_width=True):
             st.session_state.pop(state_key, None)
             st.rerun()
         note.caption("삭제하면 되돌릴 수 없습니다.")
@@ -115,7 +115,7 @@ def _card_actions(
         if st.button(
             publish_label,
             key=f"{key_prefix}_{campaign_id}",
-            width='stretch',
+            use_container_width=True,
             disabled=not naver_session_exists(),
             help=None if naver_session_exists() else "먼저 네이버에 로그인해주세요.",
         ):
@@ -126,13 +126,13 @@ def _card_actions(
             if st.button(
                 "✅ 수동으로 완료",
                 key=f"manual_{campaign_id}",
-                width='stretch',
+                use_container_width=True,
                 help="위 [본문 보기]에서 복사해 네이버에 직접 붙여넣고 발행했다면 여기를 눌러주세요.",
             ):
                 repo.update_campaign(campaign_id, status="published", publish_error=None)
                 st.toast("게시 완료로 표시했습니다.")
                 st.rerun()
-    if right.button("🗑️ 삭제", key=f"{state_key}_ask", width='stretch'):
+    if right.button("🗑️ 삭제", key=f"{state_key}_ask", use_container_width=True):
         st.session_state[state_key] = True
         st.rerun()
 

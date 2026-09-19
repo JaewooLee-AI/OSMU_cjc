@@ -41,7 +41,7 @@ MODES: Dict[str, dict] = {
         # The caption used to promise "키워드를 넣지 않으므로 검색 노출은 포기합니다".
         # The draft prompt genuinely never shows the pool, but the brand name
         # is itself a keyword and recurs naturally: measured over five posts
-        # this mode still landed 더봄봄 three to five times. Nothing is being
+        # this mode still landed 키노피스 three to five times. Nothing is being
         # inserted — the claim was just wrong, and a marketer who reads it and
         # then sees the keyword in the report has been told the wrong thing.
         "caption": "소재를 깊게 풀어 씁니다. 키워드를 맞추려는 교정을 하지 않아 검색 노출은 기대하지 않습니다.",

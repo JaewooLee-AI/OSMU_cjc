@@ -1,8 +1,8 @@
 """Keeps generated titles from converging on each other.
 
 Every post is drafted from the same brand kit and the same company facts, so
-the title model gravitates to the same handful of shapes ("한복 업사이클링으로
-완성한 ...", "... 더봄봄의 특별한 ..."). Two layers, matching the
+the title model gravitates to the same handful of shapes ("ATUM 3D 측정으로
+완성한 ...", "... 키노피스의 특별한 ..."). Two layers, matching the
 verify-don't-just-instruct pattern used for compliance and SEO density:
 
 1. Recent titles go into the drafting prompt as "avoid these".
@@ -26,8 +26,8 @@ from ai_workers.multi_llm_router import generate_text
 SIMILARITY_THRESHOLD = 0.55
 
 # Bigram overlap alone misses the failure this module was written for: real
-# titles from this project ("한복 업사이클링으로 완성한 특별한 더봄봄 소품" vs
-# "한복 업사이클링으로 완성한 일상의 조각들, 더봄봄") score only ~27% because
+# titles from this project ("ATUM 3D 측정으로 완성한 특별한 키노피스 가발" vs
+# "ATUM 3D 측정으로 완성한 일상의 자신감, 키노피스") score only ~27% because
 # their distinctive tails genuinely differ — yet a reader scanning the blog
 # index sees the same headline template every time. A shared verbatim run of
 # this many characters, over and above the mandated brand/keyword terms, is
@@ -51,7 +51,7 @@ REWRITE_SYSTEM_PROMPT = (
 def _distinctive_part(title: str, ignore_terms: List[str]) -> str:
     """The title with mandated repeats (brand, SEO keywords) removed."""
     reduced = title.lower()
-    # Longest first so "한복 업사이클링" is consumed before "한복" can fragment it.
+    # Longest first so "맞춤가발" is consumed before "가발" can fragment it.
     for term in sorted((t or "" for t in ignore_terms), key=len, reverse=True):
         if term:
             reduced = reduced.replace(term.lower(), " ")

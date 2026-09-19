@@ -3,8 +3,8 @@
 `keyword_research` answers two objective questions — how many people search
 a term, how many posts already compete for it — and both are brand-agnostic.
 What it cannot answer is whether *this* company has anything honest to say
-about the term. Left to the numbers alone, a sweep seeded with '한복,
-업사이클링, 리폼' returns `자갈` at rank 8 with a perfectly good score,
+about the term. Left to the numbers alone, a sweep seeded with '가발,
+두피, 창업' returns an off-topic term at rank 8 with a perfectly good score,
 because Naver's related-keyword data is drawn from ad co-occurrence rather
 than topical meaning. No threshold removes that; it needs a reader.
 
@@ -302,15 +302,15 @@ SEED_SYSTEM_PROMPT = (
     "씨앗 키워드는 그 자체로 쓸 키워드가 아니라, **연관검색어를 최대한 많이 끌어오기 위한 "
     "그물**입니다. 넓을수록 좋습니다.\n\n"
     "절대 규칙:\n"
-    "- **수식어를 붙이지 마세요.** '친환경', '업사이클링', '수제', '맞춤', '프리미엄', "
+    "- **수식어를 붙이지 마세요.** '친환경', '3D', '수제', '맞춤', '프리미엄', "
     "'소량' 같은 형용사가 붙는 순간 검색량이 거의 0이 되어 연관검색어가 나오지 않습니다. "
-    "'친환경 답례품'이 아니라 그냥 **'답례품'** 이라고 쓰세요.\n"
+    "'맞춤 가발'이 아니라 그냥 **'가발'** 이라고 쓰세요.\n"
     "- **브랜드명·자체 용어·업계 전문용어를 쓰지 마세요.** 같은 이유로 결과가 비어버립니다.\n"
     "- 누구나 아는 **순수한 카테고리 이름 한 단어**를 쓰세요. 2~5글자가 적당합니다.\n"
     "- 브랜드가 다루는 서로 다른 카테고리를 5개 고르세요. "
     "한 카테고리에 몰면 그 축의 연관어만 나옵니다.\n\n"
-    "좋은 예시의 형태: '답례품', '기념품', '굿즈제작', '공예키트', '한복'\n"
-    "나쁜 예시의 형태: '친환경 답례품', '한복 업사이클링', '기업 ESG 행사'\n\n"
+    "좋은 예시의 형태: '가발', '탈모', '두피케어', '항암', '창업교육'\n"
+    "나쁜 예시의 형태: '친환경 가발공정', 'ATUM 3D측정', '기업 ESG 행사'\n\n"
     '반드시 아래 JSON만 출력하세요: {"seeds": ["...", "...", "...", "...", "..."]}'
 )
 
@@ -323,18 +323,19 @@ def suggest_seeds(vendor: Optional[str] = None) -> List[str]:
     volume has no related keywords to discover, so the sweep returned the
     seeds back and nothing else. The brand kit's industry and core facts
     describe the business in ordinary words, which is what Naver can match.
+
+    Raises whatever the LLM call raises (missing model/key, network, parse) —
+    the caller shows the message so the marketer knows what to fix instead of
+    guessing from a generic failure notice.
     """
-    try:
-        raw = generate_text(
-            vendor=vendor or get_configured_vendor(),
-            prompt=_brand_context(),
-            system=SEED_SYSTEM_PROMPT,
-            max_tokens=500,
-            note="keyword-seeds",
-        )
-        seeds = _parse(raw).get("seeds", [])
-    except Exception:
-        return []
+    raw = generate_text(
+        vendor=vendor or get_configured_vendor(),
+        prompt=_brand_context(),
+        system=SEED_SYSTEM_PROMPT,
+        max_tokens=500,
+        note="keyword-seeds",
+    )
+    seeds = _parse(raw).get("seeds", [])
     return [s.strip() for s in seeds if isinstance(s, str) and s.strip()][:5]
 
 
@@ -354,9 +355,9 @@ def apply(keywords: List[str], proposal: Optional[dict] = None) -> None:
 
     `proposal` carries the group each keyword landed in, and writing it is the
     point: without it the curation was a one-way loss of everything this
-    module worked out. `identity` is the clearest case — the model correctly
-    labels 더봄봄 and 한복 새활용 as brand vocabulary that draws 15 and 10
-    searches a month, and then the old version of this function threw the
+    module worked out.     `identity` is the clearest case — the model correctly
+    labels brand vocabulary like 키노피스 as low-search identity terms,
+    and then the old version of this function threw the
     label away and let them compete for titles like anything else.
 
     Weights are seeded per group but **never overwrite a weight the marketer

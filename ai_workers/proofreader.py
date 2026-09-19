@@ -16,10 +16,10 @@ Two design choices carry the risk here:
    would have no way to see what moved. This also produces the exact
    before/after list shown in the report.
 
-2. **Brand vocabulary is protected.** '새활용', '더봄봄', '짱리본핀',
-   '행복인형 미니미' all look like errors to a general Korean proofreader —
-   and the company glossary explicitly forbids "correcting" 새활용 to 재활용
-   or splitting 더봄봄. Any correction that would alter a protected term is
+2. **Brand vocabulary is protected.** '키노피스', 'ATUM', '두피창업교육'
+   all look like errors to a general Korean proofreader —
+   and the company glossary explicitly forbids "correcting" 키노피스 spacing
+   or splitting 두피창업교육. Any correction that would alter a protected term is
    rejected before it is applied.
 """
 from __future__ import annotations
@@ -64,7 +64,7 @@ def _violates_protected(before: str, after: str, protected: List[str]) -> bool:
         if term in before and term not in after:
             return True
         # ...or the "fix" splits/merges a term that must keep its spacing,
-        # e.g. 더봄봄 -> 더 봄봄, which the glossary explicitly forbids.
+        # e.g. 키노피스 -> 키노 피스, which the glossary explicitly forbids.
         squashed = term.replace(" ", "")
         if squashed and squashed in before.replace(" ", "") and term not in after:
             return True

@@ -570,9 +570,9 @@ def run_pipeline(campaign_id: str, progress: Progress = None) -> Dict:
 
         # --- stage 2d: the title gets the banned-term dictionary too ---
         # It never did. Every guardrail layer ran on the body only, so
-        # "DDP 전시로 감상하는 더봄봄 한복 리사이클링의 미학" shipped with a
-        # compliance-relevant term — 새활용(upcycling) mislabelled as
-        # 리사이클링(recycling) — in the single most visible line of the post.
+        # a title carrying a compliance-relevant term (e.g. a treatment
+        # promise like '완치') shipped in the single most visible line of
+        # the post.
         # Deterministic substitution only: rewriting a title with an LLM here
         # would undo the keyword and variety work just done above.
         final_title, title_dict_hits = apply_blacklist_dictionary(
@@ -846,7 +846,7 @@ def _compliance_summary(guarded: dict) -> dict:
     baked into `final_text` either way), but anything the *LLM audit* only
     flagged rather than auto-corrected — including the certification-scope
     check, which by design never rewrites text, only detects — vanished
-    without a trace. A live 미보유 인증 확대 sentence ('더봄봄의 주요 제품들은
+    without a trace. A live 미보유 인증 확대 sentence ('키노피스의 주요 제품들은
     … 인증을 받아') shipped in an Instagram caption during testing with the
     report showing nothing wrong, because nothing downstream of this function
     ever looked at `compliance_pass` or `llm_issues` for these two channels.

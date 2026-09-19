@@ -26,8 +26,8 @@ def inject_theme() -> None:
 
 
 def render_sidebar_brand(brand_kit: dict) -> None:
-    name = brand_kit.get("sub_brand") or "더봄봄"
-    company = brand_kit.get("brand_name") or "주식회사 더스티치"
+    name = brand_kit.get("sub_brand") or "키노피스"
+    company = brand_kit.get("brand_name") or "씨제이씨협동조합"
     st.sidebar.markdown(
         f"<div class='tb-brand'>🧵 {name} OSMU</div>"
         f"<div class='tb-brand-sub'>{company} · 원소스 멀티유즈 워크벤치</div>",

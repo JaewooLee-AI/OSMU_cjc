@@ -33,9 +33,9 @@ with col1:
     st.download_button(
         "⬇️ 보고서 내려받기",
         data=report,
-        file_name="더스티치_OSMU_구축보고.md",
+        file_name="씨제이씨협동조합_OSMU_구축보고.md",
         mime="text/markdown",
-        width="stretch",
+        use_container_width=True,
     )
 with col2:
     st.caption(f"원본 파일: `{HANDOFF_PATH}`")

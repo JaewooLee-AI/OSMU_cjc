@@ -84,7 +84,7 @@ def _media_grid(images: List[str]) -> str:
     return f'<div class="x-media x-g{count}">{cells}</div>'
 
 
-def render(campaign: dict, display_name: str = "더봄봄", handle: str = "@thestitch") -> str:
+def render(campaign: dict, display_name: str = "키노피스", handle: str = "@cjc_coop") -> str:
     tweets: List[str] = campaign.get("x_content") or []
     hashtags = campaign.get("x_hashtags") or []
     images = all_images(campaign.get("content") or "", campaign.get("storage_file_paths") or [])

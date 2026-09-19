@@ -1,7 +1,7 @@
 """뉴스 큐레이션 — 뉴스잭킹 소재 선택.
 
 This page only *selects* an article. The generation itself happens in the
-Workbench, after the marketer attaches photos and a memo, because a 더스티치
+Workbench, after the marketer attaches photos and a memo, because a CJC
 post about a trend piece is worth far more with a shot of the actual product
 in it than without. That News/Manual unification (both tracks are the same
 shape, differing only in the seed material) is why there's one pipeline in
@@ -55,7 +55,7 @@ with col1:
     )
     extra_text = st.text_input(
         "추가 검색어 (쉼표로 구분)",
-        placeholder="예: 새활용 산업, 펫 휴머니제이션, 텀블벅 친환경",
+        placeholder="예: 탈모 관리, 항암가발 지원, 소상공인 창업교육",
     )
 with col2:
     limit_per_keyword = st.slider("키워드별 기사 수", min_value=1, max_value=5, value=2)

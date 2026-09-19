@@ -1,12 +1,12 @@
-"""브랜드 킷 — 회사 자료에서 채워 넣은 더스티치/더봄봄 설정.
+"""브랜드 킷 — 회사 자료에서 채워 넣은 씨제이씨협동조합/키노피스 설정.
 
 Everything on this page is pre-populated from company_info/ on first launch
 (core/brand_seed.py) rather than left as empty placeholders, so the very
-first generated draft already knows the brand's product names, price zones,
+first generated draft already knows the brand's product names, specs,
 certifications and voice. The prompts-to-fill-this-in helper expanders from
 OSMU_admin are kept for fields the team will want to evolve.
 
-The compliance section is 환경성 표시·광고 (greenwashing), not 의료법 — see the
+The compliance section is 의료법/표시·광고법, not 환경성 표시·광고 — see the
 rationale at the top of ai_workers/guardrail.py.
 """
 from __future__ import annotations
@@ -26,7 +26,7 @@ FEW_SHOT_DELIMITER = "\n---\n"
 
 st.markdown("#### 🎨 브랜드 컬러")
 st.markdown(palette_html(), unsafe_allow_html=True)
-st.caption("한복 오방색에서 뽑은 팔레트입니다. 화면 테마(assets/custom.css)와 시뮬레이터에 동일하게 적용됩니다.")
+st.caption("조합 브랜드 컬러(네이비·골드) 팔레트입니다. 화면 테마(assets/custom.css)와 시뮬레이터에 동일하게 적용됩니다.")
 
 with st.form("brand_kit_form"):
     st.markdown("#### 🏢 기업 · 채널")
@@ -45,7 +45,7 @@ with st.form("brand_kit_form"):
 
     st.divider()
     guardrail_enabled = st.toggle(
-        "🛡️ 환경성 표시·광고 컴플라이언스 가드레일",
+        "🛡️ 의료법·표시광고법 컴플라이언스 가드레일",
         value=existing.get("guardrail_enabled", True),
         help="켜면 모든 초안이 (1) 금기어 사전 치환 + (2) LLM 법무 검토관 감사를 거칩니다.",
     )
@@ -77,7 +77,7 @@ with st.form("brand_kit_form"):
     st.markdown(
         """<div class='tb-card'>
         💡 <b>매번 전체 주입:</b> 유사도 검색(RAG) 대신 등록된 용어 전체를 항상 프롬프트에 넣습니다.
-        14개 남짓한 용어집은 전부 넣어도 ~600토큰이고, 검색이 한 번 빗나가 '더봄봄'을 '더 봄봄'으로
+        14개 남짓한 용어집은 전부 넣어도 ~600토큰이고, 검색이 한 번 빗나가 '키노피스'를 '키노 피스'로
         쓰는 초안이 나오는 쪽이 훨씬 비쌉니다.
         </div>""",
         unsafe_allow_html=True,
@@ -88,7 +88,7 @@ with st.form("brand_kit_form"):
         columns=["용어", "설명/올바른 표기"],
     )
     edited_terminology = st.data_editor(
-        terminology_df, num_rows="dynamic", width='stretch', key="terminology_editor"
+        terminology_df, num_rows="dynamic", use_container_width=True, key="terminology_editor"
     )
 
     st.divider()
@@ -144,7 +144,7 @@ with st.form("brand_kit_form"):
     edited_keywords = st.data_editor(
         keywords_df,
         num_rows="dynamic",
-        width='stretch',
+        use_container_width=True,
         key="seo_keyword_editor",
         column_config={
             "전환 가중치": st.column_config.NumberColumn(
@@ -157,14 +157,14 @@ with st.form("brand_kit_form"):
         "🏷️ **검색 타깃**을 끄면 그 키워드로는 검색 노출을 노리지 않습니다 — 초안 프롬프트의 "
         "키워드 목록에서 빠지고, 타깃 슬롯도 제목도 맡지 않습니다. 다만 풀에는 남아 있어 "
         "본문에는 계속 등장하고, 제목 반복 검사에서도 '반복돼도 되는 단어'로 계속 취급됩니다. "
-        "**브랜드 어휘가 여기 해당합니다** — `더봄봄`은 월 15회, `한복 새활용`은 월 10회밖에 "
-        "검색되지 않아, 이 단어로 제목을 지으면 그 글의 검색 노출을 사실상 포기하는 셈입니다. "
+        "**브랜드 어휘가 여기 해당합니다** — `키노피스`·`ATUM` 같은 고유명사는 검색량이 적어, "
+        "이 단어로 제목을 지으면 그 글의 검색 노출을 사실상 포기하는 셈입니다. "
         "가중치를 낮추는 것과는 다릅니다: 가중치는 '이 유입이 얼마짜리인가'이고, 브랜드 유입은 "
         "비싸지만 양이 없는 것뿐입니다."
     )
     st.caption(
-        "⚖️ 컴플라이언스 검수가 제거하는 표현(예: '친환경 ○○')은 키워드로 두면 밀도를 "
-        "영원히 채우지 못합니다. 리포트에 그런 키워드가 표시되면 '새활용' 계열로 바꾸세요."
+        "⚖️ 컴플라이언스 검수가 제거하는 표현(예: '탈모 완치')은 키워드로 두면 밀도를 "
+        "영원히 채우지 못합니다. 리포트에 그런 키워드가 표시되면 '두피케어·스타일 보완' 계열로 바꾸세요."
     )
 
     # 만료는 조용히 일어나고, 조용히 가중치 체계를 끕니다 —
@@ -186,13 +186,13 @@ with st.form("brand_kit_form"):
         )
 
     st.divider()
-    st.markdown("#### 🚫 금기어 치환 사전 (그린워싱 방지)")
+    st.markdown("#### 🚫 금기어 치환 사전 (의료법·표시광고법)")
     st.markdown(
         """<div class='tb-card'>
         🛡️ <b>결정론적 치환:</b> 아래 금기어는 AI가 무엇을 쓰든 발행 전 <b>100% 자동으로</b> 치환어로 바뀝니다.
         LLM 감사는 이 사전에 없는 새로운 과장 표현까지 추가로 잡아냅니다.<br>
-        기준: 「환경기술 및 환경산업 지원법」 환경성 표시·광고 관리제도 + 「표시·광고의 공정화에 관한 법률」.
-        새활용 제품은 <b>포괄적 환경성 주장</b>('100% 친환경')과 <b>미보유 인증 암시</b>가 가장 흔한 위반입니다.
+        기준: 「의료법」 제56조 + 「표시·광고의 공정화에 관한 법률」.
+        가발·두피 분야는 <b>치료·완치 약속</b>('탈모 완치')과 <b>절대적 안전 주장</b>('부작용 제로')이 가장 흔한 위반입니다.
         </div>""",
         unsafe_allow_html=True,
     )
@@ -201,7 +201,7 @@ with st.form("brand_kit_form"):
         [{"금기어": k, "치환어": v} for k, v in blacklist_map.items()], columns=["금기어", "치환어"]
     )
     edited_blacklist = st.data_editor(
-        blacklist_df, num_rows="dynamic", width='stretch', key="blacklist_editor"
+        blacklist_df, num_rows="dynamic", use_container_width=True, key="blacklist_editor"
     )
 
     st.divider()
@@ -270,7 +270,7 @@ if submitted:
     st.rerun()
 
 if not existing.get("guardrail_enabled", True):
-    st.warning("가드레일이 꺼져 있습니다. 검증되지 않은 환경성 주장이 검수 없이 발행될 수 있습니다.")
+    st.warning("가드레일이 꺼져 있습니다. 치료·완치 약속 같은 위반 표현이 검수 없이 발행될 수 있습니다.")
 
 # Outside the form above: this is stored in its own table and managed with its
 # own button, and st.form only allows st.form_submit_button inside it.

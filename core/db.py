@@ -62,7 +62,7 @@ create table if not exists brand_kit (
     -- measurable from Naver, the second only the brand knows. Absent keys
     -- default to 1.0, so an empty map reproduces pure traffic ranking.
     keyword_weights           text not null default '{}',
-    -- 본문에는 쓰되 제목은 맡기지 않을 키워드. 브랜드 어휘(더봄봄, 한복 새활용)가
+    -- 본문에는 쓰되 제목은 맡기지 않을 키워드. 브랜드 어휘(키노피스, ATUM)가
     -- 여기 들어갑니다 — 검색 수요가 없어 제목을 맡기면 노출을 버리는 셈이지만,
     -- 글에는 계속 등장해야 하는 단어라 풀에서 뺄 수도 없습니다. 가중치로 누르지
     -- 않는 이유는 가중치가 '이 유입의 사업적 가치'라는 다른 뜻이기 때문입니다.

@@ -2,9 +2,10 @@
 
 OSMU_web shipped a ShortsView simulator but OSMU_admin never generated
 anything to put in it, so the panel always rendered an empty 9:16 frame. This
-fills that gap, which matters for 더스티치 specifically: their 2026 홍보 외주제작
-plan budgets 쇼츠 10종 as a deliverable, and the reference channel in
-company_info/sns_info.txt is an Instagram Reel.
+fills that gap, which matters for CJC specifically: short-form videos are a
+core deliverable for product demos (e.g. ATUM 10-minute scan walkthroughs)
+and education promos, where a talking-head plus on-screen caption carries
+further than a still photo.
 
 Shorts writing is not "the blog post, shorter". It's a shot list with on-
 screen text, where the constraint is that the right-hand button cluster and

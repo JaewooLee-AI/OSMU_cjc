@@ -2,7 +2,7 @@
 """OSMU 콘텐츠 워크벤치 — 공개 사용자 가이드 (GitHub에 커밋되는 문서).
 
 etc/ 아래의 이전 가이드들과 달리 이 파일은 저장소에 실제로 커밋되는 문서입니다.
-그래서 특정 회사(더스티치/더봄봄) 예시 대신 일반화된 설명을 쓰고, 이 코드베이스가
+그래서 특정 회사 예시 대신 일반화된 설명을 쓰고, 이 코드베이스가
 "clone해서 자기 회사에 맞게 쓰는 템플릿"이라는 전제를 반영합니다.
 
 특히 사용자가 가장 헷갈려하는 ⚙️ 설정 → 네이버 API 탭의 동작 원리를 깊게 다룹니다:
@@ -724,6 +724,6 @@ add_bullets(s, Inches(0.9), Inches(4.15), Inches(11.2), Inches(2.2), [
     (0, "views/06_settings.py — 이 문서의 네이버 API 설명이 나온 실제 화면 코드", False),
 ], size=15, color=RGBColor(0xF0, 0xE3, 0xE8), space_after=14, muted=RGBColor(0xD8, 0xC6, 0xCE))
 
-out_path = "/Users/jwlee/project/OSMU_thestitch/docs/OSMU_사용자_가이드.pptx"
+out_path = "/Users/jwlee/project/OSMU_cjc/docs/OSMU_사용자_가이드.pptx"
 prs.save(out_path)
 print("Saved:", out_path, "| slides:", len(prs.slides._sldIdLst))

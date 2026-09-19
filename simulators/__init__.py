@@ -22,13 +22,13 @@ def render(channel: str, campaign: dict, is_mobile: bool = False, brand_kit: dic
         blog_name = (brand_kit.get("sub_brand") or brand_kit.get("brand_name") or "공식 블로그") + " 공식 블로그"
         return naver_blog.render(campaign, is_mobile=is_mobile, blog_name=blog_name)
     if channel == "instagram":
-        return instagram.render(campaign, username=brand_kit.get("instagram_handle") or "thestitch_artplay")
+        return instagram.render(campaign, username=brand_kit.get("instagram_handle") or "cjc_coop")
     if channel == "x":
-        return x_thread.render(campaign, display_name=brand_kit.get("sub_brand") or "더봄봄")
+        return x_thread.render(campaign, display_name=brand_kit.get("sub_brand") or "키노피스")
     if channel == "shorts":
         return shorts.render(
             campaign,
-            handle="@" + (brand_kit.get("instagram_handle") or "thestitch_artplay"),
+            handle="@" + (brand_kit.get("instagram_handle") or "cjc_coop"),
             show_dead_zone=kwargs.get("show_dead_zone", True),
         )
     raise ValueError(f"Unknown channel: {channel}")

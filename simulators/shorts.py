@@ -63,7 +63,7 @@ CSS = """
 CAPTION_SAFE_CHARS = 20  # matches the writer's per-cut limit
 
 
-def render(campaign: dict, handle: str = "@thestitch_artplay", show_dead_zone: bool = True) -> str:
+def render(campaign: dict, handle: str = "@cjc_coop", show_dead_zone: bool = True) -> str:
     script = campaign.get("shorts_script") or {}
     if isinstance(script, str):
         script = {}

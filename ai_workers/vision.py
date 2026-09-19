@@ -3,8 +3,8 @@
 OSMU_admin's version made **one vision call per photo**, sending a full-size
 (1024px) image alongside a ~350-token Korean instruction prompt that embedded
 the marketer's memo — and it re-ran from scratch on every campaign, even for
-a product shot that had already been analyzed a dozen times. For 더스티치,
-whose posts reuse the same 행복인형 / 짱리본핀 studio photos constantly, that
+a product shot that had already been analyzed a dozen times. For CJC,
+whose posts reuse the same ATUM / 키노피스 studio photos constantly, that
 was the single largest avoidable cost in the pipeline.
 
 Five layers cut it down here, in descending order of impact:

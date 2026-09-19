@@ -1,13 +1,13 @@
-"""Second-pass compliance reviewer, rebuilt for 더스티치's actual legal exposure.
+"""Second-pass compliance reviewer, built for 씨제이씨협동조합's actual legal exposure.
 
-OSMU_admin's guardrail audited against 의료법 (medical advertising law),
-because that engine was built for a healthcare client. 더스티치 sells upcycled
-hanbok goods and environmental education, so the law that actually bites here
-is **환경성 표시·광고** — 「환경기술 및 환경산업 지원법」 제16조의10 and the
-환경부 '환경성 표시·광고 관리제도에 관한 고시', plus 표시·광고의 공정화에 관한
-법률. The classic failure mode isn't "cures cancer", it's greenwashing:
-absolute claims ("100% 친환경"), unverifiable quantities ("탄소 3kg 절감"),
-and borrowing the authority of certifications the company doesn't hold.
+CJC sells custom/antiphonal wigs and scalp-care-adjacent services — not a
+medical institution or medicine — so the law that actually bites here is
+**medical-efficacy overstatement**: 의료법 제56조 (prohibition on
+misleading medical advertising) and 표시·광고의 공정화에 관한 법률
+(false/exaggerated advertising). The classic failure mode isn't
+greenwashing, it's treatment promises: "탈모 완치", "모발 영구 재생",
+"병원 치료 대체", "부작용 제로" and certification-scope creep
+("KOTITI 인증받은 제품들은 …" for the whole catalogue).
 
 Three layers, same defense-in-depth shape as the original:
 
@@ -37,23 +37,26 @@ from typing import Dict, List, Optional, Tuple
 from ai_workers.multi_llm_router import generate_text
 
 AUDIT_SYSTEM_PROMPT = (
-    "당신은 대한민국 「환경기술 및 환경산업 지원법」의 환경성 표시·광고 관리제도와 "
+    "당신은 대한민국 「의료법」 제56조(의료광고 규제)와 "
     "「표시·광고의 공정화에 관한 법률」을 기준으로 마케팅 문안을 검토하는 법무 검토관입니다. "
-    "새활용(업사이클링) 제품과 친환경 교육서비스를 판매하는 사회적기업의 글을 검토합니다.\n\n"
+    "맞춤가발·항암가발 제조와 가발/두피 창업 교육을 제공하는 협동조합의 글을 검토합니다. "
+    "이 조합은 의료기관·의약품이 아니므로 치료 효능을 약속하거나 암시해서는 안 됩니다.\n\n"
     "다음을 중점적으로 찾아내세요:\n"
-    "1) 포괄적·절대적 환경성 주장 — '100% 친환경', '완전 무해', '지구를 살리는', '무독성' 등 "
-    "제품 전 과정을 입증하지 않고 쓰는 표현.\n"
-    "2) 검증 불가능한 정량 효과 — 근거 자료 없이 제시한 탄소 절감량, 물 절약량, 폐기물 감축량.\n"
+    "1) 의학적 치료·완치 약속 — '탈모 완치', '탈모 치료', '완치 가능', '치료 가능', "
+    "'모발 영구 재생', '100% 치료', '병원 치료 대체', '의학적 효능' 등. "
+    "가발은 스타일 보완 수단이며 치료가 아닙니다.\n"
+    "2) 절대적 안전 주장 — '부작용 제로' 등. KOTITI 안전성 검증 범위를 넘기는 표현은 위반입니다.\n"
     "3) 보유하지 않은 인증·수상의 암시, 그리고 **보유한 인증의 범위를 넘겨 쓰는 것**. "
     "인증은 인증받은 품목에만 붙습니다. 일부 품목만 인증받았는데 '저희 제품들은', "
-    "'모든 소품은'처럼 전체가 인증받은 것처럼 읽히면 위반입니다. 인증을 품질·신뢰의 "
+    "'모든 가발은'처럼 전체가 인증받은 것처럼 읽히면 위반입니다. 인증을 품질·신뢰의 "
     "일반적 보증('인증을 받아 더욱 믿을 수 있습니다')으로 확대하는 것도 위반입니다.\n"
     "4) 최상급·배타적 표현 — '국내 최초', '업계 최고', '유일한', '완벽한'.\n"
-    "5) 소비자를 위축시키는 공포·죄책감 소구 — '쓰지 않으면 지구가 망합니다' 류.\n"
-    "6) **[검증된 사실]과 어긋나는 수치** — 가격대, 수량, 연도, 실적, 인증 건수. "
+    "5) 소비자를 위축시키는 공포·불안 소구 — '지금 안 쓰면 대머리가 됩니다' 류.\n"
+    "6) **[검증된 사실]과 어긋나는 수치** — 스펙(24개 센서·10분), 기간(7~10일), "
+    "인증 수치(폼알데하이드 20mg/kg 이하·톨루엔 1,000mg/kg 이하), 연도, 실적. "
     "[검증된 사실]에 없거나 그와 다른 숫자가 나오면 반드시 지적하고, corrected_text에서는 "
     "[검증된 사실]에 맞게 고치거나 숫자를 빼세요. 절대 새 숫자를 지어내지 마세요.\n\n"
-    "제품의 색감·소재·쓰임새에 대한 사실 서술이나, 기부받은 한복을 재료로 쓴다는 "
+    "제품의 착용감·디자인·제작 과정에 대한 사실 서술이나, 3D 스캔으로 본을 뜬다는 "
     "설명 자체는 문제가 아닙니다. 과장하지 않은 표현까지 억지로 고치지 마세요.\n\n"
     "텍스트 중간에 `[IMAGE: 경로]` 형식의 태그가 있다면 사진 삽입 위치 마크업이므로 "
     "절대 삭제·수정·이동하지 말고 원래 자리에 글자 그대로 유지하세요.\n\n"
@@ -76,15 +79,12 @@ AUDIT_SYSTEM_PROMPT = (
 
 
 # Sentences claiming a certification for a collective subject. The audit
-# prompt asks for this too, but an instruction is not a guarantee: all five of
-# the first production batch passed while carrying "더봄봄의 소품들은 …
-# 새활용제품인증을 받아 더욱 믿을 수 있습니다", which claims a four-product
-# certification for the whole catalogue. Under 환경성 표시·광고 관리제도 that is
-# the 미보유 인증 암시 case this guardrail exists for, so it gets a
-# deterministic detector like the banned-term dictionary has.
+# prompt asks for this too, but an instruction is not a guarantee — so the
+# 미보유 인증 암시 case gets a deterministic detector like the banned-term
+# dictionary has.
 #
 # Brand-agnostic by construction: the specific product names come from the
-# Brand Kit glossary, so nothing here is 더스티치-specific.
+# Brand Kit glossary, so nothing here is brand-specific.
 _CERT_RE = re.compile(r"[가-힣A-Za-z]*인증")
 _COLLECTIVE_RE = re.compile(
     r"모든|모두|전\s?제품|전\s?품목|전\s?라인|제품들|소품들|상품들|굿즈들|아이템들|라인업"
@@ -93,9 +93,9 @@ _SENTENCE_RE = re.compile(r"[^.!?\n]+[.!?]?")
 
 CERT_SCOPE_NOTE = (
     "인증받은 품목이 아니라 제품 전체가 인증된 것처럼 읽힙니다. "
-    "인증받은 품목명을 직접 쓰거나('행복인형과 스크런치는 …'), "
-    "인증 언급을 그 문장에서 빼세요. 「환경기술 및 환경산업 지원법」 환경성 표시·광고 "
-    "관리제도상 미보유 인증 암시에 해당할 수 있습니다."
+    "인증받은 품목명을 직접 쓰거나('키노피스 인증 제품은 …'), "
+    "인증 언급을 그 문장에서 빼세요. 「표시·광고의 공정화에 관한 법률」상 "
+    "부당한 표시·광고에 해당할 수 있습니다."
 )
 
 
@@ -111,14 +111,14 @@ def check_certification_scope(text: str, brand_kit: dict) -> List[dict]:
     * it names no specific product.
 
     Word order carries the distinction that matters. Korean modifiers precede
-    their head, so "새활용제품인증을 받은 제품들은 …" is restrictive — the
+    their head, so "KOTITI인증을 받은 제품들은 …" is restrictive — the
     collective is scoped *by* the certification and the claim is accurate.
     Reverse them and the collective becomes the subject — "저희 제품들은 …
     인증을 받아" claims the certification for the whole catalogue. Only the
     second order is flagged; on the first production batch that is exactly
     one sentence out of five posts, and it is the one that over-claims.
     """
-    # Brand names are not products: "더봄봄의 소품들은 …" names the brand and
+    # Brand names are not products: "키노피스의 제품들은 …" names the brand and
     # still says nothing about which items are certified.
     excluded = {
         (brand_kit.get("brand_name") or "").strip(),
@@ -135,11 +135,11 @@ def check_certification_scope(text: str, brand_kit: dict) -> List[dict]:
         collective = _COLLECTIVE_RE.search(sentence)
         if not cert or not collective or collective.start() > cert.start():
             continue
-        # A glossary term inside the certification word itself ('새활용' in
-        # '새활용제품인증') is not the sentence naming a product.
+        # A glossary term inside the certification word itself ('KOTITI' in
+        # 'KOTITI인증') is not the sentence naming a product.
         outside_cert = sentence[: cert.start()] + sentence[cert.end():]
         if any(name in outside_cert for name in product_names):
-            # "행복인형과 스크런치 등 인증 제품들은 …" carries its own scope.
+            # "키노피스 인증 제품들은 …" carries its own scope.
             continue
         findings.append({"phrase": sentence, "note": CERT_SCOPE_NOTE})
     return findings
@@ -234,7 +234,7 @@ def _parse_issue(item) -> Tuple[Optional[str], str]:
 
 # 위반이 아니라 '더 넣으면 좋겠다'는 제안임을 드러내는 말. 아래 _looks_like_suggestion
 # 참고 — 프롬프트가 suggestions 필드를 따로 두었지만 지시는 보증이 아니고, 실제로
-# 새활용제품인증을 본문에 더 소개하라는 권고가 issues로 올라와 글 전체를 재생성
+# KOTITI인증을 본문에 더 소개하라는 권고가 issues로 올라와 글 전체를 재생성
 # 대상으로 만들었다.
 #
 # 활용형 전체가 아니라 어간으로 등록한다. 처음엔 "권장합니다"·"좋습니다"처럼

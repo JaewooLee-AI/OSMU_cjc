@@ -1,9 +1,9 @@
 """Keyword demand vs. competition, via NCP NAVER API HUB.
 
 `seo_optimizer` decides which brand keywords a post should carry, but it
-picks them from the draft alone — it can tell that a post is *about* 한복
-without knowing whether 한복 is a term anyone searches for, or one that
-3.6 million existing blog posts are already fighting over. This module
+picks them from the draft alone — it can tell that a post is *about* 가발
+without knowing whether 가발 is a term anyone searches for, or one that
+millions of existing blog posts are already fighting over. This module
 supplies the missing half.
 
 Two signals, both from API HUB on one key:
@@ -413,7 +413,7 @@ def golden_score(demand: float, documents: int) -> float:
     """Demand per unit of competition.
 
     Document counts span several orders of magnitude (a niche term has
-    thousands, 한복 has millions), so dividing by the raw count would let the
+    thousands, a head term has millions), so dividing by the raw count would let the
     denominator swamp every other consideration and rank the list by
     obscurity alone. log10 compresses it back to a comparable range, which is
     the same reason keyword tools quote 'competition' on a log-ish scale.
@@ -598,7 +598,7 @@ def test_connection(client_id: str, client_secret: str) -> tuple[bool, str]:
     """One blog-search call, used by the settings screen to validate a key."""
     try:
         payload = _request(
-            BLOG_PATH, params={"query": "한복", "display": 1}, client=(client_id, client_secret)
+            BLOG_PATH, params={"query": "가발", "display": 1}, client=(client_id, client_secret)
         )
     except NaverApiError as exc:
         return False, str(exc)
@@ -608,7 +608,7 @@ def test_connection(client_id: str, client_secret: str) -> tuple[bool, str]:
 def test_searchad_connection(customer_id: str, api_key: str, secret_key: str) -> tuple[bool, str]:
     """One /keywordstool call, used by the settings screen to validate a key."""
     try:
-        rows = _keywordstool(["한복"], client=(customer_id, api_key, secret_key))
+        rows = _keywordstool(["가발"], client=(customer_id, api_key, secret_key))
     except NaverApiError as exc:
         return False, str(exc)
     return True, f"연결 성공 — 연관키워드 {len(rows)}개, 검색량 조회 정상"

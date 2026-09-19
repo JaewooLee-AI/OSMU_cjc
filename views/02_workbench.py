@@ -104,12 +104,12 @@ with top_mid:
     # Deletion lives next to the dropdown, not gated behind a generated draft
     # or a publish action — a campaign stuck empty from a past error (no
     # content, never reaching '게시 대기') still needs a way out.
-    if selected_id and st.button("🗑️ 삭제", width='stretch', key="delete_selected_campaign"):
+    if selected_id and st.button("🗑️ 삭제", use_container_width=True, key="delete_selected_campaign"):
         repo.delete_campaign(selected_id)
         st.session_state.pop("wb_campaign_id", None)
         st.rerun()
 with top_right:
-    if st.button("➕ 새 콘텐츠", width='stretch', type="primary"):
+    if st.button("➕ 새 콘텐츠", use_container_width=True, type="primary"):
         reusable = next((c for c in editable if _is_untouched_draft(c)), None)
         if reusable:
             st.session_state["wb_campaign_id"] = reusable["id"]
@@ -151,7 +151,7 @@ with editor_col:
         "담당자 메모 (초안의 씨앗)",
         value=campaign.get("memo") or "",
         height=150,
-        placeholder="예: 성수동 팝업 3일차. 리본핀이 제일 먼저 팔림. 20대 손님이 색감 보고 골랐다가 새활용인 걸 나중에 알고 좋아함.",
+        placeholder="예: 가발창업교육 5기 모집. ATUM 10분 스캔 시연 포함. 40대 예비창업자가 제작기간 7~10일에 제일 관심 보임.",
         key=f"memo_{selected_id}",
     )
 
@@ -250,7 +250,7 @@ with editor_col:
         )
         remove_cols = st.columns(len(attached))
         for idx, rel in enumerate(attached):
-            if remove_cols[idx].button(f"🗑️ {idx + 1}", key=f"rm_{selected_id}_{idx}", width="stretch"):
+            if remove_cols[idx].button(f"🗑️ {idx + 1}", key=f"rm_{selected_id}_{idx}", use_container_width=True):
                 repo.update_campaign(selected_id, storage_file_paths=[p for p in attached if p != rel])
                 st.rerun()
     else:
@@ -272,7 +272,7 @@ with editor_col:
         )
 
     save_col, gen_col = st.columns([1, 1])
-    if save_col.button("💾 저장", width='stretch'):
+    if save_col.button("💾 저장", use_container_width=True):
         repo.update_campaign(
             selected_id, title=title.strip() or None, memo=memo, content_mode=chosen_mode,
             **sheet_values,
@@ -280,7 +280,7 @@ with editor_col:
         st.toast("저장했습니다.")
 
     can_generate = bool(memo.strip() or campaign.get("source_url"))
-    if gen_col.button("🪄 초안 생성", type="primary", width='stretch', disabled=not can_generate):
+    if gen_col.button("🪄 초안 생성", type="primary", use_container_width=True, disabled=not can_generate):
         repo.update_campaign(
             selected_id, title=title.strip() or None, memo=memo, content_mode=chosen_mode,
             **sheet_values,
@@ -364,7 +364,7 @@ with editor_col:
             )
             length_mode = next(k for k, v in LENGTH_MODES.items() if v["label"] == length_label)
 
-            if btn_col.button("✏️ 수정 반영", type="primary", width="stretch", key=f"revbtn_{selected_id}"):
+            if btn_col.button("✏️ 수정 반영", type="primary", use_container_width=True, key=f"revbtn_{selected_id}"):
                 # Persist the editor's current text first, so the revision
                 # starts from what the marketer sees rather than from the last
                 # saved version. Runs even with no request —맞춤법 교정만으로도
@@ -472,10 +472,10 @@ with editor_col:
 
         st.divider()
         act_a, act_b = st.columns(2)
-        if act_a.button("🚀 네이버 게시 대기열로", type="primary", width='stretch'):
+        if act_a.button("🚀 네이버 게시 대기열로", type="primary", use_container_width=True):
             repo.update_campaign(selected_id, status="ready_to_publish")
             st.success("게시 대기열에 넣었습니다. [네이버 게시] 페이지에서 진행하세요.")
-        if act_b.button("🔁 초안 다시 생성", width='stretch'):
+        if act_b.button("🔁 초안 다시 생성", use_container_width=True):
             with st.status("다시 생성 중…", expanded=True) as status_box:
                 try:
                     run_pipeline(selected_id, progress=lambda msg: status_box.write(msg))
@@ -691,7 +691,7 @@ with editor_col:
                         st.caption(
                             f"⚖️ 타깃 키워드 {', '.join(conflicts)} 는 컴플라이언스 검수에서 "
                             "제거되는 표현이라 다시 생성해도 채워지지 않습니다. "
-                            "⚙️ 설정에서 '새활용' 계열 표현으로 교체하세요."
+                             "⚙️ 설정에서 '두피케어·스타일 보완' 계열 표현으로 교체하세요."
                         )
 
 

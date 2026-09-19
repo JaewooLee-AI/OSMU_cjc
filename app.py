@@ -1,4 +1,4 @@
-"""더스티치 OSMU 워크벤치 — entry point.
+"""씨제이씨협동조합 OSMU 워크벤치 — entry point.
 
 Folds OSMU_admin (Streamlit engine + Supabase + polling worker) and OSMU_web
 (Next.js editor + channel simulators) into one Streamlit process backed by a
@@ -21,7 +21,7 @@ from core.theme import inject_theme, render_sidebar_brand
 load_dotenv()
 
 st.set_page_config(
-    page_title="더스티치 OSMU 워크벤치",
+    page_title="씨제이씨협동조합 OSMU 워크벤치",
     page_icon="🧵",
     layout="wide",
     initial_sidebar_state="expanded",

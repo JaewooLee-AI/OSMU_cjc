@@ -1,29 +1,29 @@
 /*
-  더스티치 OSMU — 더봄봄 브랜드 테마
-  팔레트는 core/brand_seed.BRAND_COLORS 와 1:1 대응합니다 (한복 오방색 기반).
-  자주(저고리 고름) / 쪽빛 / 금박 / 옥색 / 한지 배경.
+  씨제이씨협동조합 OSMU — 키노피스 브랜드 테마
+  팔레트는 core/brand_seed.BRAND_COLORS 와 1:1 대응합니다 (네이비 신뢰 + 골드 포인트).
+  딥네이비 / 틸 / 골드 / 민트 / 웜페이퍼 배경.
 */
 
 @import url('https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@400;500;700&family=Nanum+Myeongjo:wght@700&display=swap');
 
 :root {
-    --tb-primary: #A6224B;
-    --tb-primary-dark: #7C1738;
-    --tb-secondary: #2B4C8C;
+    --tb-primary: #1B3A5C;
+    --tb-primary-dark: #122A44;
+    --tb-secondary: #2F6B7A;
     --tb-accent: #C9A227;
-    --tb-mint: #86C1B3;
-    --tb-bg: #FBF7F2;
+    --tb-mint: #7FB5A8;
+    --tb-bg: #F7F5F0;
     --tb-card: #FFFFFF;
-    --tb-border: #E8DFD4;
-    --tb-text: #2B2118;
-    --tb-text-muted: #8A7B6B;
+    --tb-border: #E5E0D5;
+    --tb-text: #23262B;
+    --tb-text-muted: #7A828E;
     --tb-radius: 10px;
 
-    --tb-status-awaiting_media: #8A7B6B;
-    --tb-status-queued: #8A7B6B;
+    --tb-status-awaiting_media: #7A828E;
+    --tb-status-queued: #7A828E;
     --tb-status-processing: #C9A227;
-    --tb-status-draft: #2B4C8C;
-    --tb-status-ready_to_publish: #A6224B;
+    --tb-status-draft: #2F6B7A;
+    --tb-status-ready_to_publish: #1B3A5C;
     --tb-status-published: #2F855A;
     --tb-status-failed: #C53030;
 }

@@ -63,14 +63,14 @@ NOTICE = Sheet(
     ),
     fields=[
         ("when", "일시", "예: 2026년 9월 24일(목) ~ 9월 27일(일) / 10월 14일 10:00~13:00"),
-        ("where", "장소", "예: 더스티치 성수 작업장 (서울 성동구 …)"),
-        ("who", "대상", "예: 미술 강사, 공방 운영자, 관련 자격 취득 예정자"),
+        ("where", "장소", "예: 씨제이씨협동조합 서초 본점 (서울 서초구 강남대로 18길 16-8)"),
+        ("who", "대상", "예: 예비 창업자, 가발·두피 매장 운영자, 교육 수강 희망자"),
         ("capacity", "정원", "예: 12명 (선착순 마감)"),
         ("price", "비용", "예: 1인 18만원 (재료비·키트 포함)"),
         ("how", "신청 방법", "예: 네이버 폼으로 신청 후 안내 문자 수신"),
         ("link", "신청 링크", "예: https://…"),
         ("deadline", "마감", "예: 2026년 10월 7일(화) 18:00"),
-        ("contact", "문의", "예: 02-000-0000 / thestitch@…"),
+        ("contact", "문의", "예: 02-6396-3388 / cjc@cjccoop.com"),
     ],
 )
 
@@ -81,17 +81,17 @@ PRODUCT = Sheet(
     key="product",
     title="🛍️ 제품·주문 정보",
     hint=(
-        "답례품·굿즈·키링처럼 **독자가 사려고 검색해서 들어오는 글**에 채우세요. "
+        "맞춤가발·항암가발·교육 과정처럼 **독자가 사려고·신청하려고 검색해서 들어오는 글**에 채우세요. "
         "검색으로 들어온 사람이 가격과 주문 방법을 못 찾으면 바로 나가고, 네이버는 그 "
         "이탈을 순위에 반영합니다. **해당하는 항목만** 채우면 됩니다."
     ),
     fields=[
-        ("price", "가격대", "예: 1만~3만원 (사이즈·구성에 따라)"),
+        ("price", "가격대", "예: 품목·옵션에 따라 상이 (전화·이메일 문의)"),
         ("moq", "최소 주문 수량", "예: 30개부터 / 낱개 구매 가능"),
         ("lead_time", "제작·배송 기간", "예: 주문 후 제작 7~10일 + 배송 2일"),
-        ("size", "규격·크기", "예: 행복인형 약 8cm, 키링 고리 포함 12cm"),
-        ("options", "구성·옵션", "예: 색동/단색 2종, 개별 포장 파우치 포함"),
-        ("custom", "맞춤 제작", "예: 기관 로고 라벨·패키지 제작 가능"),
+        ("size", "규격·크기", "예: ATUM 본체 486 x 1462 x 1042cm / 키노피스 항암가발 S·M·L"),
+        ("options", "구성·옵션", "예: 패션/부분/인모/항암/탑피스 등 품목, S·M·L 사이즈"),
+        ("custom", "맞춤 제작", "예: 두상 스캔 기반 맞춤 제작·OEM 상담 가능"),
         ("order", "주문 방법·구매처", "예: 스마트스토어 https://… / 전화 주문"),
     ],
 )
@@ -128,8 +128,7 @@ def is_brief(sheet: Sheet, fields: Dict[str, str] | None) -> bool:
     '내용 우선' asks for 1500자. That is right for a 모집 공고 carrying nine
     facts and wrong for a 연휴 안내 carrying one: the first 추석 연휴 안내
     generated this way came out at 848자, of which the actual announcement was
-    three sentences and the rest was 한복 새활용 소개 and the 2023·2024
-    육성지원사업 선정 이력 — the brand-padding failure these fields exist to
+    three sentences and the rest was ATUM 소개 and the 조합 인증·수상 이력 — the brand-padding failure these fields exist to
     fix, reappearing from the other direction.
 
     A 연휴·휴무 안내 carries one to three fields; a 모집·행사 공고 carries five
@@ -160,8 +159,8 @@ def coverage(sheet: Sheet, content: str, fields: Dict[str, str] | None) -> Dict[
     with. The marketer is shown what went missing and fixes it in the editor.
 
     A value counts as present when it appears verbatim, or when most of its
-    tokens do. Verbatim alone is too strict: a marketer types '더스티치 성수
-    작업장' and the draft writes '성수 작업장', the same fact. Requiring every
+    tokens do. Verbatim alone is too strict: a marketer types '씨제이씨 서초
+    본점' and the draft writes '서초 본점', the same fact. Requiring every
     token is wrong the other way — '2026년 10월 14일(화) 10:00~13:00' almost
     never survives whole. MATCH_RATIO is the line between those, tuned so that
     dropping the year or the time from a date reads as a real omission while
@@ -201,7 +200,7 @@ def coverage(sheet: Sheet, content: str, fields: Dict[str, str] | None) -> Dict[
 def _token_in(token: str, squeezed_body: str) -> bool:
     """토큰이 본문에 있는가. 조사가 붙은 형태도 같은 말로 봅니다.
 
-    담당자는 '한복에 관심있는 누구나'처럼 조사를 붙여 적고, 본문은 '한복'으로
+    담당자는 '가발에 관심있는 누구나'처럼 조사를 붙여 적고, 본문은 '가발'로
     씁니다. 마지막 한 글자를 떼고 한 번 더 보는 것으로 대부분의 조사(에, 를,
     의, 로…)를 흡수합니다. 두 글자 토큰까지 자르면 한 글자가 되어 아무 데나
     걸리므로 세 글자부터만 자릅니다.

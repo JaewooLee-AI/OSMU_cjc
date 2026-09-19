@@ -110,8 +110,8 @@ def title_candidates(
     converts worse than average. That is survivable in the body — the phrase
     appears, the post picks up the search, nobody is misled. In the title it
     is not: the title is the whole promise of the post, and the first batch
-    run with modes produced '결혼답례품 고민이라면 DDP 서울패션마켓 더봄봄 방문'
-    for a festival announcement and '어린이집답례품 추천 …' for a keyring
+    run with modes produced a brand-name-stuffed title ('… 키노피스 방문')
+    for a festival announcement and an off-topic keyword title for a product
     launch. Both keywords are demoted to 0.3 in the brand kit; both took the
     title anyway, because weight only reordered the candidates and every
     stage that writes a title was handed the unfiltered pool.
@@ -122,7 +122,7 @@ def title_candidates(
     announces itself as.
 
     `excluded` is the second, separate reason a keyword cannot hold a title:
-    brand vocabulary. '더봄봄' draws 15 searches a month and '한복 새활용' 10,
+    brand vocabulary. '키노피스' and 'ATUM' draw little search volume,
     so a title built on either forfeits the exposure the title exists to win —
     but both must keep appearing in the body, and both are needed in the pool
     so the variety check knows they are allowed to repeat across titles. They
@@ -177,7 +177,7 @@ def competing_keywords(keywords: list[str], non_targets: list[str] | None) -> li
 
     Brand vocabulary stays in `seo_keywords` because other machinery needs it
     there — `title_variety` reads the pool to know which words are allowed to
-    repeat across titles, and dropping '더봄봄' from it would make every title
+    repeat across titles, and dropping '키노피스' from it would make every title
     carrying the brand name look like a repeat of the last one. What it must
     not do is take a slot in the competition: it is in the text either way.
     """
@@ -195,12 +195,12 @@ def select_target_keywords(
     Relevance is still decided by the draft: the writing model has just read
     the memo, the article and the photo captions, and the keywords it reached
     for unprompted are the ones the post genuinely covers. A keyword it never
-    used is off-topic here — forcing '한복 기부' into a post about a trade-show
+    used is off-topic here — forcing an unrelated keyword into a post about a trade-show
     conversation is what produced the stuffed drafts this replaced.
 
     What the draft cannot know is which of those keywords anyone searches for.
-    '결혼답례품' draws 19,620 searches a month against 11 competing posts per
-    search; '굿즈제작' draws 15,200 against 61. Both may appear in the same
+    '맞춤가발' draws against its competing-post pool; '가발창업' draws against its own.
+    Both may appear in the same
     article, and before this the one the writer happened to repeat more often
     won the title. Among the keywords the draft actually used, ranking is now
     by opportunity — measured demand divided by measured competition — with
@@ -218,18 +218,18 @@ def select_target_keywords(
     `competing_keywords`. Without it the ranking is decided by whichever words
     the draft repeats most, and the words a brand repeats most are its own
     name and its own category: a batch run with every other fix in place still
-    produced targets of ['더봄봄', '한복 새활용'] on four posts out of five,
-    which between them draw 25 searches a month.
+    produced brand-vocabulary-only targets on four posts out of five,
+    which between them draw little search traffic.
 
     **May return an empty list, and callers must handle that.** It means the
     post's subject has no home in the keyword pool. The previous fallback
     forced the pool's best-scoring keyword onto such a post so that "a post is
     never published with no SEO intent at all"; in practice that took an
-    article about a teacher-training course, handed it 돌잔치답례품 because
+    article about a training course, handed it an unrelated product keyword because
     the phrase appeared once in passing, inflated it to the density floor and
     put it in the title. No SEO intent is the honest outcome there, and it
-    surfaces the real gap — 더스티치 sells education services and the pool
-    contains no education keyword — instead of hiding it behind a post that
+    surfaces the real gap — the pool
+    contains no matching keyword — instead of hiding it behind a post that
     ranks for nothing and reads as a product ad.
     """
     keywords = competing_keywords(keywords, non_targets)
