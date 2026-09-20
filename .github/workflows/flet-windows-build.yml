@@ -8,11 +8,19 @@ name: flet-windows-build
 # "안"의 파일만 패키징하므로, flet_app/만 놓고 빌드하면 그 바깥의 세 패키지가
 # 통째로 빠져 실행 즉시 ImportError가 난다. 그래서 빌드 직전에 오늘의 저장소
 # 구조를 그대로 복제한 stage/ 디렉터리(core/, ai_workers/, simulators/, flet_app/를
-# 형제로 나란히)를 만들고, 그 stage/를 프로젝트 루트로 삼아 flet_app.main 모듈을
-# 진입점으로 빌드한다. 이름 충돌은 없다 — flet_app/simulators/는 flet_app 복사본
-# 안에 그대로 얹혀가고, 최상위 simulators/는 그 옆의 형제 폴더로 별도 위치한다.
-# 소스 코드는 손대지 않는다: flet_app/main.py의 기존 parent.parent 계산이 이
-# 스테이징 구조에서도 stage/를 정확히 가리키기 때문이다.
+# 형제로 나란히)를 만든다. 이름 충돌은 없다 — flet_app/simulators/는 flet_app
+# 복사본 안에 그대로 얹혀가고, 최상위 simulators/는 그 옆의 형제 폴더로 별도
+# 위치한다.
+#
+# `flet build`는 앱 경로 "루트"에 진입 스크립트가 직접 있어야 한다(--module-name은
+# 하위 디렉터리를 가리키는 점(.) 표기를 지원하지 않는다 — 첫 시도에서
+# "flet_app.py not found in the root" 에러로 확인됨). 그래서 flet_app/main.py를
+# stage/main.py로도 복사해 루트에 둔다. 그 파일의 sys.path.insert(parent.parent)
+# 계산은 이 위치에서는 안 맞는 경로를 가리키지만 해가 되지는 않는다 — Python이
+# 실행 스크립트의 디렉터리(stage/)를 기본으로 sys.path에 넣어주므로 core/,
+# ai_workers/, simulators/, flet_app/이 어차피 stage/의 형제로 이미 올바르게
+# 잡힌다. 소스 코드는 손대지 않는다: git의 flet_app/main.py는 그대로 두고,
+# 빌드 스테이징 단계에서만 복사본을 하나 더 둔다.
 
 on:
   push:
@@ -61,11 +69,12 @@ jobs:
           New-Item -ItemType Directory -Path stage | Out-Null
           Copy-Item -Recurse -Path core, ai_workers, simulators, flet_app -Destination stage
           Copy-Item -Path flet_app/pyproject.toml -Destination stage/pyproject.toml
+          Copy-Item -Path flet_app/main.py -Destination stage/main.py
           Write-Host "----- stage/ 트리 -----"
-          Get-ChildItem -Recurse stage | Select-Object -First 60 FullName | Format-Table -AutoSize
+          Get-ChildItem -Recurse stage | Select-Object -First 80 FullName | Format-Table -AutoSize
 
       - name: flet build windows
-        run: flet build windows stage --module-name flet_app.main --yes --verbose
+        run: flet build windows stage --yes --verbose
 
       - name: Confirm exe was produced
         shell: pwsh
