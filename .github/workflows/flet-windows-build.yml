@@ -1,0 +1,83 @@
+name: flet-windows-build
+
+# OSMU_cjc Flet 데스크톱 앱의 Windows용 .exe를 빌드한다.
+#
+# flet_app/main.py는 sys.path.insert(0, PROJECT_ROOT)로 자기 부모 디렉터리를
+# 경로에 넣어 core/, ai_workers/, 최상위 simulators/(HTML 생성용 — flet_app/simulators/
+# 와는 다른 별개 패키지)를 그대로 import한다. `flet build`는 지정한 앱 경로
+# "안"의 파일만 패키징하므로, flet_app/만 놓고 빌드하면 그 바깥의 세 패키지가
+# 통째로 빠져 실행 즉시 ImportError가 난다. 그래서 빌드 직전에 오늘의 저장소
+# 구조를 그대로 복제한 stage/ 디렉터리(core/, ai_workers/, simulators/, flet_app/를
+# 형제로 나란히)를 만들고, 그 stage/를 프로젝트 루트로 삼아 flet_app.main 모듈을
+# 진입점으로 빌드한다. 이름 충돌은 없다 — flet_app/simulators/는 flet_app 복사본
+# 안에 그대로 얹혀가고, 최상위 simulators/는 그 옆의 형제 폴더로 별도 위치한다.
+# 소스 코드는 손대지 않는다: flet_app/main.py의 기존 parent.parent 계산이 이
+# 스테이징 구조에서도 stage/를 정확히 가리키기 때문이다.
+
+on:
+  push:
+    paths:
+      - "flet_app/**"
+      - "core/**"
+      - "ai_workers/**"
+      - "simulators/**"
+      - ".github/workflows/flet-windows-build.yml"
+  workflow_dispatch:
+
+env:
+  # 없으면 flet build의 rich-console 진행 표시가 체크마크 이모지를 Windows
+  # 러너 기본 cp1252 콘솔 코드페이지로 출력하려다 UnicodeEncodeError로
+  # 빌드가 시작하기도 전에 죽는다 (spike에서 이미 확인됨).
+  PYTHONUTF8: "1"
+  FLET_CLI_NO_RICH_OUTPUT: "1"
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        # flet_app/pyproject.toml을 pip install하지 않고 의존성을 그대로
+        # 나열한다 — 그 파일은 정식 패키징 레이아웃(빌드 백엔드 지정 등)이
+        # 아니라서 `pip install .`이 실패할 위험이 있다 (spike와 같은 근거).
+        run: |
+          python -m pip install --upgrade pip
+          pip install flet python-dotenv cryptography openai anthropic google-genai `
+            requests beautifulsoup4 feedparser playwright pyperclip Pillow pywin32
+
+      - name: Download Playwright's Chromium fallback + driver
+        env:
+          PLAYWRIGHT_BROWSERS_PATH: "0"
+        run: playwright install chromium
+
+      - name: Stage project root for flet build
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Path stage | Out-Null
+          Copy-Item -Recurse -Path core, ai_workers, simulators, flet_app -Destination stage
+          Copy-Item -Path flet_app/pyproject.toml -Destination stage/pyproject.toml
+          Write-Host "----- stage/ 트리 -----"
+          Get-ChildItem -Recurse stage | Select-Object -First 60 FullName | Format-Table -AutoSize
+
+      - name: flet build windows
+        run: flet build windows stage --module-name flet_app.main --yes --verbose
+
+      - name: Confirm exe was produced
+        shell: pwsh
+        run: |
+          $exe = Get-ChildItem -Path "stage/build/windows" -Filter "*.exe" -Recurse | Select-Object -First 1
+          if (-not $exe) { throw "No .exe found under stage/build/windows — flet build produced no executable." }
+          Write-Host "Built: $($exe.FullName)"
+
+      - name: Upload build artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: osmu-cjc-windows-build
+          path: stage/build/windows
+          if-no-files-found: warn
