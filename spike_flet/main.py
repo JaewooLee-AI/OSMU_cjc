@@ -10,30 +10,29 @@ Answers two questions before the real Flet migration starts:
    today; pyperclip's Windows fallback writes plain text, which would paste
    raw "<p>" tags into Naver's editor.) — see clipboard_win.py.
 
-Both checks run on startup and get written to results.txt next to wherever
-the process's CWD is (CI sets this explicitly — see the workflow). The
-process force-exits with a code reflecting pass/fail, since there is nobody
-to click this window shut in CI and a live Flet UI would otherwise hang the
-build job forever.
-
-started.txt is written *before* anything else — including before `import
-flet` even finishes running its own module-level setup — so a run that never
-produces results.txt can still be told apart from a run whose Python code
-never started at all (e.g. the Flutter engine itself failing to boot).
+Checks run and get written to results.txt *before* `ft.run()` is ever
+called, deliberately. Earlier iterations of this spike called `ft.run()`
+first and the packaged exe died before a single line of this script ran
+(no started.txt, no Windows Application-log crash entry — a clean,
+near-instant exit(1)), even with `view=ft.AppView.FLET_APP_HIDDEN`. That
+points at GitHub's windows-latest runner having no real display for Flet's
+native window layer to initialize against — an artifact of headless CI, not
+something an actual end-user's PC (which has a monitor) would ever hit. The
+two questions this spike actually cares about don't need a window at all, so
+this version never calls `ft.run()` — it just runs the checks, writes the
+results, and exits. If you need to reintroduce a UI, do the checks first and
+treat `ft.run()` as best-effort afterward (wrapped so a crash there can't
+erase results.txt).
 """
 from __future__ import annotations
 
 import os
 import sys
-import threading
-import time
 import traceback
 from pathlib import Path
 
 CWD = Path.cwd()
 (CWD / "started.txt").write_text(f"process started, cwd={CWD}", encoding="utf-8")
-
-import flet as ft  # noqa: E402 — started.txt must be written first, see above
 
 import playwright_check  # noqa: E402
 
@@ -57,34 +56,13 @@ def run_checks() -> list[str]:
     return lines
 
 
-def main(page: ft.Page) -> None:
+if __name__ == "__main__":
     try:
-        page.title = "OSMU Flet Spike"
         results = run_checks()
         RESULTS_PATH.write_text("\n".join(results), encoding="utf-8")
         failed = any("FAIL" in line for line in results)
-
-        try:
-            page.add(ft.Text("\n".join(results), selectable=True))
-            page.update()
-        except Exception:  # noqa: BLE001 — UI failing shouldn't hide results.txt
-            (CWD / "ui_error.txt").write_text(traceback.format_exc(), encoding="utf-8")
     except Exception:  # noqa: BLE001 — a crash here must still leave a trace behind
         (CWD / "crash.txt").write_text(traceback.format_exc(), encoding="utf-8")
         failed = True
 
-    def _force_exit() -> None:
-        time.sleep(1.5)  # let the UI paint and files flush before exiting
-        os._exit(1 if failed else 0)
-
-    threading.Thread(target=_force_exit, daemon=True).start()
-
-
-if __name__ == "__main__":
-    # FLET_APP_HIDDEN: CI has no real display compositor for a visible desktop
-    # window to render into (this is what actually killed the app before —
-    # see git log for the "Problem getting monitor brightness" / no started.txt
-    # failure this replaced). A hidden window still needs the same native
-    # window handle, just not shown, which is the closest thing Flet has to a
-    # documented headless mode for desktop builds.
-    ft.run(main, view=ft.AppView.FLET_APP_HIDDEN)
+    os._exit(1 if failed else 0)
