@@ -261,7 +261,16 @@ def _build_login_section(page: ft.Page, scale: float, naver_blog_id: str, refres
         login_status.update()
 
         def _work() -> None:
-            result = open_naver_login_session(naver_blog_id)
+            # open_naver_login_session()은 실패를 {"success": False, ...}로
+            # 돌려주지만, Playwright/Chrome 실행 자체가 터지면 예외를 던진다.
+            # page.run_thread()로 돌린 함수 안에서 예외가 나면 Flet이 그걸
+            # 조용히 삼켜버려서(콜백/로그 없음) 사용자 눈엔 "로그인 중…"에서
+            # 영원히 멈춘 것처럼 보인다 — 반드시 여기서 잡아 화면에 띄워야 한다.
+            try:
+                result = open_naver_login_session(naver_blog_id)
+            except Exception as exc:  # noqa: BLE001
+                result = {"success": False, "message": f"❌ 로그인 실패: {exc}"}
+
             if result["success"]:
                 refresh_all()
             else:
