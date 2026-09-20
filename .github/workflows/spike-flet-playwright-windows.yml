@@ -90,6 +90,12 @@ jobs:
             if (Test-Path $p) { Get-Content $p -Raw | Write-Host } else { Write-Host "(missing)" }
           }
 
+          Write-Host "----- Windows Application event log (last 2 min, errors) -----"
+          Get-WinEvent -FilterHashtable @{LogName='Application'; StartTime=(Get-Date).AddMinutes(-2)} -ErrorAction SilentlyContinue |
+            Where-Object { $_.LevelDisplayName -in @('Error','Critical') } |
+            Format-List TimeCreated, ProviderName, Id, Message |
+            Out-String -Width 300 | Write-Host
+
           if (-not (Test-Path $resultsPath)) {
             throw "results.txt was not created after ${elapsed}s — see logs above (started.txt tells you whether Python code ran at all)."
           }
