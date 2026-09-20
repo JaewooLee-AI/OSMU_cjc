@@ -81,4 +81,10 @@ def main(page: ft.Page) -> None:
 
 
 if __name__ == "__main__":
-    ft.run(main)
+    # FLET_APP_HIDDEN: CI has no real display compositor for a visible desktop
+    # window to render into (this is what actually killed the app before —
+    # see git log for the "Problem getting monitor brightness" / no started.txt
+    # failure this replaced). A hidden window still needs the same native
+    # window handle, just not shown, which is the closest thing Flet has to a
+    # documented headless mode for desktop builds.
+    ft.run(main, view=ft.AppView.FLET_APP_HIDDEN)
