@@ -10,11 +10,16 @@ Answers two questions before the real Flet migration starts:
    today; pyperclip's Windows fallback writes plain text, which would paste
    raw "<p>" tags into Naver's editor.) — see clipboard_win.py.
 
-Both checks run on startup, get written to results.txt next to wherever the
-process's CWD is (CI sets this explicitly — see the workflow), and the
-process force-exits with a code reflecting pass/fail. There is nobody to
-click this window shut in CI, and a live Flet UI would otherwise hang the
+Both checks run on startup and get written to results.txt next to wherever
+the process's CWD is (CI sets this explicitly — see the workflow). The
+process force-exits with a code reflecting pass/fail, since there is nobody
+to click this window shut in CI and a live Flet UI would otherwise hang the
 build job forever.
+
+started.txt is written *before* anything else — including before `import
+flet` even finishes running its own module-level setup — so a run that never
+produces results.txt can still be told apart from a run whose Python code
+never started at all (e.g. the Flutter engine itself failing to boot).
 """
 from __future__ import annotations
 
@@ -22,13 +27,17 @@ import os
 import sys
 import threading
 import time
+import traceback
 from pathlib import Path
 
-import flet as ft
+CWD = Path.cwd()
+(CWD / "started.txt").write_text(f"process started, cwd={CWD}", encoding="utf-8")
 
-import playwright_check
+import flet as ft  # noqa: E402 — started.txt must be written first, see above
 
-RESULTS_PATH = Path.cwd() / "results.txt"
+import playwright_check  # noqa: E402
+
+RESULTS_PATH = CWD / "results.txt"
 
 
 def run_checks() -> list[str]:
@@ -49,17 +58,23 @@ def run_checks() -> list[str]:
 
 
 def main(page: ft.Page) -> None:
-    page.title = "OSMU Flet Spike"
-    results = run_checks()
-    RESULTS_PATH.write_text("\n".join(results), encoding="utf-8")
+    try:
+        page.title = "OSMU Flet Spike"
+        results = run_checks()
+        RESULTS_PATH.write_text("\n".join(results), encoding="utf-8")
+        failed = any("FAIL" in line for line in results)
 
-    page.add(ft.Text("\n".join(results), selectable=True))
-    page.update()
-
-    failed = any("FAIL" in line for line in results)
+        try:
+            page.add(ft.Text("\n".join(results), selectable=True))
+            page.update()
+        except Exception:  # noqa: BLE001 — UI failing shouldn't hide results.txt
+            (CWD / "ui_error.txt").write_text(traceback.format_exc(), encoding="utf-8")
+    except Exception:  # noqa: BLE001 — a crash here must still leave a trace behind
+        (CWD / "crash.txt").write_text(traceback.format_exc(), encoding="utf-8")
+        failed = True
 
     def _force_exit() -> None:
-        time.sleep(1.5)  # let the UI paint and results.txt flush before exiting
+        time.sleep(1.5)  # let the UI paint and files flush before exiting
         os._exit(1 if failed else 0)
 
     threading.Thread(target=_force_exit, daemon=True).start()

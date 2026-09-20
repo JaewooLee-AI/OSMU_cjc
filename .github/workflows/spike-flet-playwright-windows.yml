@@ -60,18 +60,38 @@ jobs:
         run: |
           $exe = Get-ChildItem -Path "build/windows" -Filter "*.exe" -Recurse | Select-Object -First 1
           if (-not $exe) { throw "No .exe found under build/windows — flet build produced no executable." }
+          $dir = $exe.DirectoryName
           Write-Host "Running $($exe.FullName)"
 
-          $proc = Start-Process -FilePath $exe.FullName -WorkingDirectory $exe.DirectoryName -PassThru
-          Start-Sleep -Seconds 20
-          if (-not $proc.HasExited) {
-            Write-Host "Process still running after 20s — killing it."
-            Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue
+          $stdout = Join-Path $dir "stdout.log"
+          $stderr = Join-Path $dir "stderr.log"
+          $proc = Start-Process -FilePath $exe.FullName -WorkingDirectory $dir -PassThru `
+            -RedirectStandardOutput $stdout -RedirectStandardError $stderr
+
+          $resultsPath = Join-Path $dir "results.txt"
+          $maxWaitSeconds = 90
+          $elapsed = 0
+          while (-not (Test-Path $resultsPath) -and -not (Test-Path (Join-Path $dir "crash.txt")) `
+                 -and $elapsed -lt $maxWaitSeconds -and -not $proc.HasExited) {
+            Start-Sleep -Seconds 5
+            $elapsed += 5
           }
 
-          $resultsPath = Join-Path $exe.DirectoryName "results.txt"
+          if (-not $proc.HasExited) {
+            Write-Host "Process still running after ${elapsed}s — killing it."
+            Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue
+          } else {
+            Write-Host "Process exited on its own after ${elapsed}s with code $($proc.ExitCode)."
+          }
+
+          foreach ($name in @("started.txt", "crash.txt", "ui_error.txt", "stdout.log", "stderr.log")) {
+            $p = Join-Path $dir $name
+            Write-Host "----- $name -----"
+            if (Test-Path $p) { Get-Content $p -Raw | Write-Host } else { Write-Host "(missing)" }
+          }
+
           if (-not (Test-Path $resultsPath)) {
-            throw "results.txt was not created — the app likely crashed before running its checks."
+            throw "results.txt was not created after ${elapsed}s — see logs above (started.txt tells you whether Python code ran at all)."
           }
 
           $content = Get-Content $resultsPath -Raw
