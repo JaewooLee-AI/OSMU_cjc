@@ -13,6 +13,8 @@
 """
 from __future__ import annotations
 
+import time
+
 import flet as ft
 
 import flet_app.simulators as sim
@@ -379,6 +381,48 @@ def build(page: ft.Page, state: AppState) -> ft.Control:
     pending = repo.list_campaigns(statuses=["ready_to_publish"])
     published = repo.list_campaigns(statuses=["published"])
     lists_box.content = _build_tabs(page, scale, brand_kit, pending, published, refresh_all)
+
+    def _fingerprint(campaigns: list[dict]) -> tuple:
+        return tuple(sorted((c["id"], c.get("status"), c.get("publish_error"), c.get("updated_at")) for c in campaigns))
+
+    # 이 화면을 여러 번 오갈 때마다(다른 메뉴 갔다가 다시 들어올 때마다
+    # build()가 다시 실행된다) 새 폴링 스레드가 계속 쌓이는 걸 막기 위해,
+    # page 자체에 "지금 몇 번째로 만들어진 화면인지" 세대 번호를 적어둔다.
+    # 폴링 루프는 매 tick마다 자기 세대가 아직 최신인지 직접 확인하고, 아니면
+    # 곧바로 멈춘다 — "컨트롤이 트리에서 빠지면 update()가 예외를 던질
+    # 것이다"라는 가정에만 기대지 않는다(그 예외는 상태가 실제로 바뀌어
+    # refresh_all()이 호출될 때만 발생하므로, 아무것도 안 바뀐 채 화면만
+    # 떠난 경우엔 안 던져져서 예전 폴러가 계속 남아있었다).
+    generation = getattr(page, "_naver_publish_poll_generation", 0) + 1
+    page._naver_publish_poll_generation = generation
+    initial_fingerprint = _fingerprint(pending) + _fingerprint(published)
+
+    def _poll_for_publish_completion(last: tuple) -> None:
+        # [지금 게시]는 detached subprocess(naver_paste_worker.py)를 띄우고
+        # 바로 반환한다 — 그 프로세스가 끝나면서 campaign 상태를 published로
+        # (또는 실패 시 publish_error를) 바꿔도 이 화면과는 SQLite 말고는
+        # 아무 연결이 없어서, 예전엔 사용자가 직접 다른 메뉴에 갔다 와야만
+        # (=화면이 통째로 다시 그려져야만) 게시 대기 개수가 바뀌었다. 이 화면이
+        # 떠 있는 동안은 대신 몇 초마다 스스로 다시 읽어서 바뀐 게 있으면
+        # 새로 그린다.
+        for _ in range(200):  # 최대 ~10분 — 화면을 계속 열어두고 방치하는 경우의 안전장치
+            time.sleep(3)
+            if getattr(page, "_naver_publish_poll_generation", None) != generation:
+                return  # 다른 메뉴로 이동했다가 이 화면이 다시 만들어졌다 — 이전 세대는 멈춘다
+            try:
+                now_campaigns = repo.list_campaigns(statuses=["ready_to_publish", "published"])
+                now_pending = [c for c in now_campaigns if c["status"] == "ready_to_publish"]
+                now_published = [c for c in now_campaigns if c["status"] == "published"]
+                now = _fingerprint(now_pending) + _fingerprint(now_published)
+                if now != last:
+                    last = now
+                    refresh_all()
+            except Exception:
+                return
+
+    # 폴링 루프가 pending/published 전체 리스트(생성된 본문 등 큰 JSON 컬럼
+    # 포함)를 계속 참조하지 않도록, 그 지문(fingerprint)만 인자로 넘긴다.
+    page.run_thread(_poll_for_publish_completion, initial_fingerprint)
 
     return ft.Column(
         [

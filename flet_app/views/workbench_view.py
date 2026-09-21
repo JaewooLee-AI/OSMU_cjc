@@ -14,6 +14,8 @@ Flet은 화면을 다시 그릴 때마다 `repo.get_campaign()`을 새로 읽어
 """
 from __future__ import annotations
 
+import time
+
 import flet as ft
 
 from ai_workers import content_mode, factsheet, vision
@@ -58,14 +60,18 @@ def _is_untouched_draft(c: dict) -> bool:
 
 
 def _copy_field(label: str, text: str, page: ft.Page, scale: float, help_text: str = "") -> ft.Control:
-    def on_copy(e: ft.Event) -> None:
-        page.set_clipboard(text or "")
-
+    # page.set_clipboard()는 이 Flet 버전(1.0)에 없는 메서드다 — 클립보드는
+    # 이제 서비스(flet.Clipboard)를 통한 비동기 호출이거나, 여기처럼 클릭
+    # 제스처 안에서 클라이언트가 직접 처리하는 action=ft.CopyToClipboard(...)
+    # 로 붙인다. page 인자는 다른 호출부와의 시그니처 호환을 위해 남겨둔다.
     return ft.Column(
         [
             ft.Row([
                 ft.Text(label, weight=ft.FontWeight.BOLD, size=fs(12, scale)),
-                ft.IconButton(icon=ft.Icons.COPY, icon_size=16, on_click=on_copy, tooltip="복사"),
+                ft.IconButton(
+                    icon=ft.Icons.COPY, icon_size=16, tooltip="복사",
+                    action=ft.CopyToClipboard(text or ""),
+                ),
             ]),
             ft.Container(
                 content=ft.Text(text or "(비어 있음)", size=fs(11, scale), selectable=True),
@@ -403,6 +409,15 @@ def _build_campaign_editor(page: ft.Page, campaign_id: str, scale: float, reload
 
     # --- 저장 / 생성 ------------------------------------------------------------
     gen_status = ft.Text("", size=fs(12, scale))
+    # run_pipeline 도중 gen_status.value를 계속 갱신해도 이 Flet 버전은
+    # page.run_thread 안에서 부른 control.update()를 제때 화면에 반영하지
+    # 못한다(다른 창을 클릭해야 밀린 게 한꺼번에 나타나는 것까지 확인됨 —
+    # flet-dev/flet#6847과 같은 부류의 버그). ProgressRing의 회전 애니메이션은
+    # 일단 화면에 뜨고 나면 Flutter 쪽에서 자체적으로 계속 도는 것이라 이
+    # 문제를 아예 타지 않는다 — 그래서 "지금 뭔가 진행 중이다"는 스피너로,
+    # 어떤 단계인지는(라이브로는 안 되니) 끝났을 때 한 번에 보여주는 로그로
+    # 나눠서 알려준다.
+    gen_spinner = ft.ProgressRing(width=16, height=16, stroke_width=2, visible=False)
 
     def _collect_sheet_values() -> dict:
         out = {}
@@ -423,17 +438,28 @@ def _build_campaign_editor(page: ft.Page, campaign_id: str, scale: float, reload
 
     can_generate = bool(memo_field.value.strip() or campaign.get("source_url"))
     generate_button = ft.FilledButton("🪄 초안 생성", disabled=not can_generate, expand=True)
+    generate_hint = ft.Text(
+        "메모를 입력하거나 뉴스 기사를 연결해야 초안을 생성할 수 있습니다.",
+        size=fs(11, scale), color=BRAND_COLORS["text_muted"], visible=not can_generate,
+    )
+
+    def on_memo_change(e: ft.Event) -> None:
+        # generate_button은 이 화면을 처음 열 때의 memo_field 값으로 딱 한 번만
+        # disabled가 정해진다 — on_change 없이는 메모를 입력해도 버튼이 계속
+        # 비활성 상태로 굳어 있어 클릭할 수 없는 것처럼 보인다.
+        now_can_generate = bool(memo_field.value.strip() or campaign.get("source_url"))
+        generate_button.disabled = not now_can_generate
+        generate_hint.visible = not now_can_generate
+        generate_button.update()
+        generate_hint.update()
+
+    memo_field.on_change = on_memo_change
 
     def on_generate(e: ft.Event) -> None:
         repo.update_campaign(
             campaign_id, title=title_field.value.strip() or None, memo=memo_field.value,
             content_mode=mode_group.value, **_collect_sheet_values(),
         )
-
-        def on_progress(msg: str) -> None:
-            gen_status.value = f"⏳ {msg}"
-            gen_status.color = BRAND_COLORS["text_muted"]
-            gen_status.update()
 
         # LLM 호출은 몇 초~수십 초가 걸린다 — on_click은 Flet의 이벤트 루프
         # 위에서 그대로 실행되므로, 여기서 직접 블로킹 호출을 하면 그동안 앱
@@ -442,21 +468,51 @@ def _build_campaign_editor(page: ft.Page, campaign_id: str, scale: float, reload
         # 자유로워 화면이 계속 반응하고 progress도 실시간으로 반영된다.
         generate_button.disabled = True
         generate_button.update()
-        gen_status.value = "⏳ 시작하는 중…"
+        gen_spinner.visible = True
+        gen_spinner.update()
+        gen_status.value = "⏳ 생성 중입니다… (수십 초 정도 걸릴 수 있어요)"
         gen_status.color = BRAND_COLORS["text_muted"]
         gen_status.update()
+
+        # 단계별 메시지는 여기 담아뒀다가 끝났을 때(성공/실패 어느 쪽이든
+        # 한 번은 확실히 반영되는 시점에) 한 번에 보여준다 — 위 스피너 주석
+        # 참고.
+        progress_log = ["⏳ 시작하는 중…"]
+
+        def on_progress(msg: str) -> None:
+            progress_log.append(f"⏳ {msg}")
 
         def _work() -> None:
             try:
                 run_pipeline(campaign_id, progress=on_progress)
-                gen_status.value = "✅ 초안 생성 완료"
-                gen_status.color = "#1B6E3C"
             except Exception as exc:  # noqa: BLE001
-                gen_status.value = f"❌ 실패: {exc}"
+                # reload()를 부르지 않는다 — 곧바로 부르면 지금 막 띄운 이
+                # 실패 메시지가 눈에 보이기도 전에 화면 전체가 새로 그려지며
+                # 사라진다(이 화면을 처음 열 때의 빈 상태로). 실패했을 때는
+                # 새로 보여줄 콘텐츠도 없으니 다시 그릴 이유도 없다.
+                progress_log.append(f"❌ 실패: {exc}")
+                gen_status.value = "\n".join(progress_log)
                 gen_status.color = "#B3261E"
-            generate_button.disabled = not (memo_field.value.strip() or campaign.get("source_url"))
-            generate_button.update()
+                gen_spinner.visible = False
+                gen_spinner.update()
+                generate_button.disabled = not (memo_field.value.strip() or campaign.get("source_url"))
+                generate_button.update()
+                gen_status.update()
+                return
+            gen_status.value = "✅ 초안 생성 완료"
+            gen_status.color = "#1B6E3C"
+            gen_spinner.visible = False
+            gen_spinner.update()
             gen_status.update()
+            # 성공 경로에서는 버튼을 다시 활성화하지 않는다(비활성 상태 그대로
+            # 둔다) — 곧바로 reload()가 이 버튼 자체를 새로 만든 것으로
+            # 통째로 갈아 끼우므로, 여기서 활성화했다가 아래 sleep 동안
+            # 사용자가 한 번 더 눌러버리면 reload()가 그 두 번째 실행이 쓰던
+            # 컨트롤을 화면에서 떼어내며 조용히 죽는 레이스가 생긴다.
+            # 성공했을 때는 새로 생성된 콘텐츠 섹션을 보여주기 위해 화면
+            # 전체를 다시 그려야 한다 — 그 전에 위 완료 메시지가 잠깐이라도
+            # 눈에 보일 시간을 준다.
+            time.sleep(0.8)
             reload()
 
         page.run_thread(_work)
@@ -467,10 +523,9 @@ def _build_campaign_editor(page: ft.Page, campaign_id: str, scale: float, reload
             ft.OutlinedButton("💾 저장", on_click=on_save, expand=True),
             generate_button,
         ]),
-        gen_status,
+        ft.Row([gen_spinner, gen_status], spacing=8),
+        generate_hint,
     ]
-    if not can_generate:
-        controls.append(ft.Text("메모를 입력하거나 뉴스 기사를 연결해야 초안을 생성할 수 있습니다.", size=fs(11, scale), color=BRAND_COLORS["text_muted"]))
 
     # --- 생성된 콘텐츠 -----------------------------------------------------------
     if campaign.get("content"):
@@ -486,38 +541,57 @@ def _build_campaign_editor(page: ft.Page, campaign_id: str, scale: float, reload
             queue_status.update()
 
         def on_regenerate(e: ft.Event) -> None:
-            def on_progress(msg: str) -> None:
-                queue_status.value = f"⏳ {msg}"
-                queue_status.update()
-
             # on_generate와 같은 이유로 별도 스레드에서 돌린다 — 그러지 않으면
             # LLM 호출이 끝날 때까지 앱 전체가 멈춘 것처럼 보인다.
             regenerate_button.disabled = True
             regenerate_button.update()
-            queue_status.value = "⏳ 시작하는 중…"
+            queue_spinner.visible = True
+            queue_spinner.update()
+            queue_status.value = "⏳ 생성 중입니다… (수십 초 정도 걸릴 수 있어요)"
             queue_status.update()
+
+            progress_log = ["⏳ 시작하는 중…"]
+
+            def on_progress(msg: str) -> None:
+                progress_log.append(f"⏳ {msg}")
 
             def _work() -> None:
                 try:
                     run_pipeline(campaign_id, progress=on_progress)
-                    queue_status.value = "✅ 완료"
                 except Exception as exc:  # noqa: BLE001
-                    queue_status.value = f"❌ 실패: {exc}"
-                regenerate_button.disabled = False
-                regenerate_button.update()
+                    # 바로 reload()하면 이 실패 메시지가 보이기도 전에 화면이
+                    # 다시 그려지며 사라진다 — on_generate와 같은 이유.
+                    progress_log.append(f"❌ 실패: {exc}")
+                    queue_status.value = "\n".join(progress_log)
+                    queue_status.color = "#B3261E"
+                    queue_spinner.visible = False
+                    queue_spinner.update()
+                    regenerate_button.disabled = False
+                    regenerate_button.update()
+                    queue_status.update()
+                    return
+                queue_status.value = "✅ 완료"
+                queue_status.color = "#1B6E3C"
+                queue_spinner.visible = False
+                queue_spinner.update()
                 queue_status.update()
+                # on_generate와 같은 이유로 성공 경로에서는 버튼을 다시
+                # 활성화하지 않는다 — 곧 reload()가 이 버튼을 통째로 새로
+                # 만든 것으로 갈아 끼운다.
+                time.sleep(0.8)
                 reload()
 
             page.run_thread(_work)
 
         queue_status = ft.Text("", size=fs(12, scale), color="#1B6E3C")
+        queue_spinner = ft.ProgressRing(width=16, height=16, stroke_width=2, visible=False)
         regenerate_button = ft.OutlinedButton("🔁 초안 다시 생성", on_click=on_regenerate, expand=True)
         controls += [
             ft.Row([
                 ft.FilledButton("🚀 네이버 게시 대기열로", on_click=on_queue, expand=True),
                 regenerate_button,
             ]),
-            queue_status,
+            ft.Row([queue_spinner, queue_status], spacing=8),
         ]
 
         controls += _build_report_controls(campaign, scale)
@@ -554,34 +628,50 @@ def _build_channel_tabs(page: ft.Page, campaign: dict, title_field: ft.TextField
         content=ft.Row([ft.Radio(value=k, label=v["label"]) for k, v in LENGTH_MODES.items()]),
     )
     revise_status = ft.Text("", size=fs(12, scale))
+    revise_spinner = ft.ProgressRing(width=16, height=16, stroke_width=2, visible=False)
     revise_button = ft.FilledButton("✏️ 수정 반영")
 
     def on_revise(e: ft.Event) -> None:
         repo.update_campaign(campaign_id, content=body_field.value)
 
-        def on_progress(msg: str) -> None:
-            revise_status.value = f"⏳ {msg}"
-            revise_status.color = BRAND_COLORS["text_muted"]
-            revise_status.update()
-
         # on_generate와 같은 이유로 별도 스레드에서 돌린다.
         revise_button.disabled = True
         revise_button.update()
-        revise_status.value = "⏳ 시작하는 중…"
+        revise_spinner.visible = True
+        revise_spinner.update()
+        revise_status.value = "⏳ 수정하고 있습니다…"
         revise_status.color = BRAND_COLORS["text_muted"]
         revise_status.update()
+
+        progress_log = ["⏳ 시작하는 중…"]
+
+        def on_progress(msg: str) -> None:
+            progress_log.append(f"⏳ {msg}")
 
         def _work() -> None:
             try:
                 revise_content(campaign_id, instruction=revise_field.value, length_mode=length_group.value, progress=on_progress)
-                revise_status.value = "✅ 수정 완료"
-                revise_status.color = "#1B6E3C"
             except Exception as exc:  # noqa: BLE001
-                revise_status.value = f"❌ 실패: {exc}"
+                # 바로 reload()하면 이 실패 메시지가 보이기도 전에 화면이
+                # 다시 그려지며 사라진다 — on_generate와 같은 이유.
+                progress_log.append(f"❌ 실패: {exc}")
+                revise_status.value = "\n".join(progress_log)
                 revise_status.color = "#B3261E"
-            revise_button.disabled = False
-            revise_button.update()
+                revise_spinner.visible = False
+                revise_spinner.update()
+                revise_button.disabled = False
+                revise_button.update()
+                revise_status.update()
+                return
+            revise_status.value = "✅ 수정 완료"
+            revise_status.color = "#1B6E3C"
+            revise_spinner.visible = False
+            revise_spinner.update()
             revise_status.update()
+            # on_generate와 같은 이유로 성공 경로에서는 버튼을 다시
+            # 활성화하지 않는다 — 곧 reload()가 이 버튼을 통째로 새로
+            # 만든 것으로 갈아 끼운다.
+            time.sleep(0.8)
             reload()
 
         page.run_thread(_work)
@@ -610,7 +700,7 @@ def _build_channel_tabs(page: ft.Page, campaign: dict, title_field: ft.TextField
             length_group,
             revise_button,
             ft.Text("요청 없이 눌러도 맞춤법·오탈자 교정은 항상 실행됩니다.", size=fs(10, scale), color=BRAND_COLORS["text_muted"]),
-            revise_status,
+            ft.Row([revise_spinner, revise_status], spacing=8),
         ],
         spacing=8, scroll=ft.ScrollMode.AUTO,
     )

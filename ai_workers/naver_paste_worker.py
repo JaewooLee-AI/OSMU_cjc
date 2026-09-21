@@ -30,6 +30,19 @@ import traceback
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
+# 이 워커는 detached subprocess로 별도 실행된다(naver_publisher.trigger_naver_publish가
+# `sys.executable -m ai_workers.naver_paste_worker`로 띄움) — flet_app/main.py의
+# stdout 재설정은 그 GUI 프로세스에만 적용되고 이 프로세스는 물려받지 않는다.
+# Windows 콘솔의 기본 코드페이지(한국어 환경은 cp949)가 이모지·em dash 같은 문자를
+# 못 찍으면 아래 곳곳의 print()가 UnicodeEncodeError로 죽는데, 그게 하필
+# `repo.update_campaign(status="published")` 바로 다음 줄(예: "완료 — ...")에서
+# 나면 방금 성공한 게시가 그 자리에서 실패로 덮어써지고 브라우저도 조기에 닫혀버린다
+# — 실제로 재현됨. 콘솔 로그 한 줄 때문에 성공한 게시가 실패로 둔갑하는 일이 없도록
+# 다른 곳에서 이미 쓴 것과 같은 방식으로 프로세스 시작 시점에 한 번 막아둔다.
+for _stream in (sys.stdout, sys.stderr):
+    if hasattr(_stream, "reconfigure"):
+        _stream.reconfigure(encoding="utf-8", errors="replace")
+
 from ai_workers.naver_publisher import NAVER_STATE_FILE, format_publish_error, launch_browser
 from ai_workers.photo_placement import split_segments
 from core import repo, storage
@@ -84,34 +97,91 @@ def _find_editor_frame(page):
         return page
 
 
+_CANCEL_SELECTORS = [
+    ".se-popup-button-cancel",
+    "button.se-popup-button-cancel",
+    ".se-popup-button.se-popup-button-cancel",
+    ".se-help-panel-close-button",
+    "button:has-text('취소')",
+    "button:has-text('아니오')",
+    ".se-popup-container button:nth-child(1)",
+]
+
+
+def _popup_still_visible(page, editor_frame) -> bool:
+    """True if a button matching our own dismiss list is still visible.
+
+    Deliberately reuses the same narrow, Naver-specific selectors we click
+    with, rather than a broader "any dialog-role element" check — an earlier
+    version of this checked generic containers like
+    [role='dialog']/.se-help-panel, which can legitimately be present as
+    ordinary Smart Editor chrome unrelated to the resume-draft popup (a
+    notice banner, a help panel) and would make every publish fail with a
+    false "there's a popup" reading. Used both as a fast-path skip (nothing
+    to do at all) and, after retrying, to tell "nothing was ever showing"
+    apart from "something was showing and we failed to close it".
+    """
+    for context in (page, editor_frame):
+        for sel in _CANCEL_SELECTORS:
+            try:
+                el = context.query_selector(sel)
+                if el and el.is_visible():
+                    return True
+            except Exception:
+                pass
+    return False
+
+
 def _dismiss_draft_restore_popup(page, editor_frame) -> None:
     """The '이어서 작성하시겠습니까?' resume-draft dialog isn't guaranteed to
     render inside #mainFrame — Naver has moved editor chrome between the top
     page and the iframe across redesigns before. Check both contexts each
-    pass rather than assuming one."""
-    cancel_selectors = [
-        ".se-popup-button-cancel",
-        "button.se-popup-button-cancel",
-        ".se-popup-button.se-popup-button-cancel",
-        ".se-help-panel-close-button",
-        "button:has-text('취소')",
-        "button:has-text('아니오')",
-        ".se-popup-container button:nth-child(1)",
-    ]
-    for attempt in range(12):
+    pass rather than assuming one.
+
+    Raises if a popup is still visible after every attempt, instead of
+    silently moving on — clicking into the title/body fields "under" a still
+    -open modal doesn't raise on its own (force=True skips Playwright's
+    actionability/obscured checks), it just quietly lands on the modal
+    instead of the editor, so the marketer used to get a blank or garbled
+    post with no explanation. Now that produces a clear publish_error
+    instead. The upfront visibility check skips the whole routine (no
+    Escape presses, no clicks) on the common case where no popup ever
+    appeared, instead of always burning through retries first.
+    """
+    if not _popup_still_visible(page, editor_frame):
+        return
+
+    for attempt in range(20):
         for context in (page, editor_frame):
-            for sel in cancel_selectors:
+            for sel in _CANCEL_SELECTORS:
                 try:
                     btn = context.query_selector(sel)
                     if btn and btn.is_visible():
                         btn.click(force=True)
                         print(f"[naver_paste_worker] dismissed draft-restore popup via '{sel}' (attempt {attempt + 1})")
                         _human_delay(1.0, 1.5)
-                        return
                 except Exception:
                     pass
+        if not _popup_still_visible(page, editor_frame):
+            return
+        # 버튼 셀렉터가 이번에도 하나도 안 맞았을 수 있으니, 많은 웹 모달이
+        # 반응하는 Escape도 매 시도마다 같이 눌러본다.
+        try:
+            page.keyboard.press("Escape")
+        except Exception:
+            pass
         time.sleep(0.5)
-    print("[naver_paste_worker] draft-restore popup dismiss: no popup found after 12 attempts (fine if none was showing)")
+
+    if _popup_still_visible(page, editor_frame):
+        # 이 시점엔 with sync_playwright()의 finally에서 브라우저가 곧 닫히므로
+        # "지금 열린 Chrome 창에서 닫아달라"고 안내하면 이미 창이 없어진 뒤라
+        # 앞뒤가 안 맞는다 — 다시 시도해보라는 안내로 대신한다.
+        raise RuntimeError(
+            "네이버가 '이어서 작성하시겠습니까?' 같은 팝업을 띄웠는데 자동으로 닫지 못했습니다. "
+            "[다시 게시]로 한 번 더 시도해주세요. 계속 실패하면 네이버 블로그에 직접 로그인해 "
+            "임시저장된 글이 있는지 확인해주세요."
+        )
+    print("[naver_paste_worker] draft-restore popup dismiss: no popup found after 20 attempts (fine if none was showing)")
 
 
 def _strip_strikethrough(editor_frame) -> None:

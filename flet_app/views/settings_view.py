@@ -150,7 +150,7 @@ def _build_font_scale_section(state: AppState, scale: float) -> ft.Control:
     )
 
 
-def _vendor_card(vendor_key: str, spec: dict, default_status: ft.Text, scale: float) -> ft.Control:
+def _vendor_card(page: ft.Page, vendor_key: str, spec: dict, default_status: ft.Text, scale: float) -> ft.Control:
     saved = repo.get_llm_setting(vendor_key)
 
     model_field = ft.TextField(
@@ -197,36 +197,52 @@ def _vendor_card(vendor_key: str, spec: dict, default_status: ft.Text, scale: fl
             status.update()
             return
 
-        status.value = "연결 테스트 중…"
+        test_button.disabled = True
+        test_button.update()
+        status.value = "⏳ 연결 테스트 중…"
         status.color = BRAND_COLORS["text_muted"]
         status.update()
 
-        ok, message = test_connection(vendor_key, model_field.value, key_to_test)
-        if not ok:
-            status.value = f"❌ {message}"
-            status.color = "#B3261E"
-            status.update()
-            return
+        def _work() -> None:
+            nonlocal saved
+            # 전체를 try/except/finally로 감싼다 — 원래는 test_connection()
+            # 호출만 감쌌는데, 그 아래 DB 저장·복호화 쪽에서 예외가 나면(락,
+            # 암호화 키 문제 등) run_thread 스레드가 조용히 죽어서 버튼이
+            # "⏳ 연결 테스트 중…" 상태로 영원히 멈춘 것처럼 남았다.
+            try:
+                ok, message = test_connection(vendor_key, model_field.value, key_to_test)
+                if not ok:
+                    status.value = f"❌ {message}"
+                    status.color = "#B3261E"
+                    return
 
-        encrypted = saved["encrypted_api_key"] if reuse_saved else encrypt_api_key(key_to_test)
-        repo.upsert_llm_setting(vendor_key, model_field.value, encrypted)
-        # 연결이 확인된 벤더를 그 자리에서 바로 기본 생성 모델로 지정합니다 —
-        # 등록과 "기본으로 지정"이 별개 단계이면 소상공인 고객이 두 번째 단계를
-        # 빠뜨리고 글쓰기 시점에야 원인을 알기 어려운 오류를 봅니다.
-        repo.save_brand_kit(default_generation_vendor=vendor_key)
+                encrypted = saved["encrypted_api_key"] if reuse_saved else encrypt_api_key(key_to_test)
+                repo.upsert_llm_setting(vendor_key, model_field.value, encrypted)
+                # 연결이 확인된 벤더를 그 자리에서 바로 기본 생성 모델로 지정합니다 —
+                # 등록과 "기본으로 지정"이 별개 단계이면 소상공인 고객이 두 번째 단계를
+                # 빠뜨리고 글쓰기 시점에야 원인을 알기 어려운 오류를 봅니다.
+                repo.save_brand_kit(default_generation_vendor=vendor_key)
 
-        saved = repo.get_llm_setting(vendor_key)
-        badge.value = _saved_badge(saved["encrypted_api_key"], saved.get("updated_at"))
-        badge.visible = True
-        delete_button.visible = True
-        key_field.value = ""
-        status.value = f"✅ {message} · 기본 생성 모델로 지정했습니다."
-        status.color = "#1B6E3C"
-        status.update()
-        badge.update()
-        delete_button.update()
-        key_field.update()
-        _refresh_default_status()
+                saved = repo.get_llm_setting(vendor_key)
+                badge.value = _saved_badge(saved["encrypted_api_key"], saved.get("updated_at"))
+                badge.visible = True
+                delete_button.visible = True
+                key_field.value = ""
+                status.value = f"✅ {message} · 기본 생성 모델로 지정했습니다."
+                status.color = "#1B6E3C"
+                badge.update()
+                delete_button.update()
+                key_field.update()
+                _refresh_default_status()
+            except Exception as exc:  # noqa: BLE001 — run_thread로 돌리므로 여기서 안 잡으면 조용히 사라진다
+                status.value = f"❌ {exc}"
+                status.color = "#B3261E"
+            finally:
+                test_button.disabled = False
+                status.update()
+                test_button.update()
+
+        page.run_thread(_work)
 
     def on_delete(e: ft.Event) -> None:
         repo.delete_llm_setting(vendor_key)
@@ -275,7 +291,7 @@ def _vendor_card(vendor_key: str, spec: dict, default_status: ft.Text, scale: fl
     )
 
 
-def _build_llm_tab(scale: float) -> ft.Control:
+def _build_llm_tab(page: ft.Page, scale: float) -> ft.Control:
     default_status = ft.Text("", size=fs(13, scale))
 
     current = repo.get_brand_kit().get("default_generation_vendor")
@@ -289,7 +305,7 @@ def _build_llm_tab(scale: float) -> ft.Control:
         default_status.color = "#B3261E"
 
     cards = ft.Row(
-        [_vendor_card(k, spec, default_status, scale) for k, spec in VENDORS.items()],
+        [_vendor_card(page, k, spec, default_status, scale) for k, spec in VENDORS.items()],
         spacing=12,
     )
 
@@ -321,7 +337,7 @@ def _build_llm_tab(scale: float) -> ft.Control:
     )
 
 
-def _build_api_hub_section(scale: float) -> ft.Control:
+def _build_api_hub_section(page: ft.Page, scale: float) -> ft.Control:
     saved = repo.get_naver_api_settings()
 
     id_field = ft.TextField(
@@ -376,24 +392,48 @@ def _build_api_hub_section(scale: float) -> ft.Control:
 
         # 저장이 먼저다: test_connection은 실제 과금되는 호출이라, 유효한 키가
         # 저장에 실패하면 다음 시도에서 또 한 번 값을 치르게 된다.
-        cap = int(cap_field.value or 0)
+        try:
+            cap = int(cap_field.value or 0)
+        except ValueError:
+            status.value = "❌ 일일 호출 상한은 숫자로 입력하세요."
+            status.color = "#B3261E"
+            status.update()
+            return
         repo.save_naver_api_settings(encrypt_api_key(id_to_test), encrypt_api_key(sec_to_test), cap)
-        ok, message = keyword_research.test_connection(id_to_test, sec_to_test)
-        status.value = f"{'✅' if ok else '❌'} {message}"
-        status.color = "#1B6E3C" if ok else "#B3261E"
+
+        test_button.disabled = True
+        test_button.update()
+        status.value = "⏳ 연결 테스트 중…"
+        status.color = BRAND_COLORS["text_muted"]
         status.update()
 
-        saved = repo.get_naver_api_settings()
-        badge.value = _saved_badge(saved["encrypted_client_secret"], saved.get("updated_at"))
-        badge.visible = True
-        delete_button.visible = True
-        id_field.value = ""
-        secret_field.value = ""
-        badge.update()
-        delete_button.update()
-        id_field.update()
-        secret_field.update()
-        _refresh_stats()
+        def _work() -> None:
+            nonlocal saved
+            try:
+                ok, message = keyword_research.test_connection(id_to_test, sec_to_test)
+                status.value = f"{'✅' if ok else '❌'} {message}"
+                status.color = "#1B6E3C" if ok else "#B3261E"
+
+                saved = repo.get_naver_api_settings()
+                badge.value = _saved_badge(saved["encrypted_client_secret"], saved.get("updated_at"))
+                badge.visible = True
+                delete_button.visible = True
+                id_field.value = ""
+                secret_field.value = ""
+                badge.update()
+                delete_button.update()
+                id_field.update()
+                secret_field.update()
+                _refresh_stats()
+            except Exception as exc:  # noqa: BLE001 — run_thread로 돌리므로 여기서 안 잡으면 조용히 사라진다
+                status.value = f"❌ {exc}"
+                status.color = "#B3261E"
+            finally:
+                test_button.disabled = False
+                status.update()
+                test_button.update()
+
+        page.run_thread(_work)
 
     def on_delete(e: ft.Event) -> None:
         nonlocal saved
@@ -409,6 +449,7 @@ def _build_api_hub_section(scale: float) -> ft.Control:
         _refresh_stats()
 
     delete_button.on_click = on_delete
+    test_button = ft.FilledButton("연결 테스트 · 저장", on_click=on_test)
 
     if saved:
         cap = int((saved or {}).get("daily_call_cap") or 0)
@@ -435,7 +476,7 @@ def _build_api_hub_section(scale: float) -> ft.Control:
             ft.Row([id_field, secret_field]),
             cap_field,
             badge,
-            ft.Row([ft.FilledButton("연결 테스트 · 저장", on_click=on_test), delete_button]),
+            ft.Row([test_button, delete_button]),
             status,
             stats_row,
         ],
@@ -443,7 +484,7 @@ def _build_api_hub_section(scale: float) -> ft.Control:
     )
 
 
-def _build_searchad_section(scale: float) -> ft.Control:
+def _build_searchad_section(page: ft.Page, scale: float) -> ft.Control:
     saved = repo.get_searchad_settings()
 
     cid_field = ft.TextField(label="CUSTOMER_ID", hint_text="저장됨" if saved else "7자리 숫자", expand=True)
@@ -473,30 +514,46 @@ def _build_searchad_section(scale: float) -> ft.Control:
             status.update()
             return
 
-        ok, message = keyword_research.test_searchad_connection(cid, akey, asec)
-        if not ok:
-            status.value = f"❌ {message}"
-            status.color = "#B3261E"
-            status.update()
-            return
-
-        repo.save_searchad_settings(encrypt_api_key(cid), encrypt_api_key(akey), encrypt_api_key(asec))
-        status.value = f"✅ {message}"
-        status.color = "#1B6E3C"
+        test_button.disabled = True
+        test_button.update()
+        status.value = "⏳ 연결 테스트 중…"
+        status.color = BRAND_COLORS["text_muted"]
         status.update()
 
-        saved = repo.get_searchad_settings()
-        badge.value = _saved_badge(saved["encrypted_secret_key"], saved.get("updated_at"))
-        badge.visible = True
-        delete_button.visible = True
-        cid_field.value = ""
-        key_field.value = ""
-        secret_field.value = ""
-        badge.update()
-        delete_button.update()
-        cid_field.update()
-        key_field.update()
-        secret_field.update()
+        def _work() -> None:
+            nonlocal saved
+            try:
+                ok, message = keyword_research.test_searchad_connection(cid, akey, asec)
+                if not ok:
+                    status.value = f"❌ {message}"
+                    status.color = "#B3261E"
+                    return
+
+                repo.save_searchad_settings(encrypt_api_key(cid), encrypt_api_key(akey), encrypt_api_key(asec))
+                status.value = f"✅ {message}"
+                status.color = "#1B6E3C"
+
+                saved = repo.get_searchad_settings()
+                badge.value = _saved_badge(saved["encrypted_secret_key"], saved.get("updated_at"))
+                badge.visible = True
+                delete_button.visible = True
+                cid_field.value = ""
+                key_field.value = ""
+                secret_field.value = ""
+                badge.update()
+                delete_button.update()
+                cid_field.update()
+                key_field.update()
+                secret_field.update()
+            except Exception as exc:  # noqa: BLE001 — run_thread로 돌리므로 여기서 안 잡으면 조용히 사라진다
+                status.value = f"❌ {exc}"
+                status.color = "#B3261E"
+            finally:
+                test_button.disabled = False
+                status.update()
+                test_button.update()
+
+        page.run_thread(_work)
 
     def on_delete(e: ft.Event) -> None:
         nonlocal saved
@@ -511,6 +568,7 @@ def _build_searchad_section(scale: float) -> ft.Control:
         delete_button.update()
 
     delete_button.on_click = on_delete
+    test_button = ft.FilledButton("연결 테스트 · 저장", on_click=on_test)
 
     return ft.Column(
         [
@@ -522,14 +580,14 @@ def _build_searchad_section(scale: float) -> ft.Control:
             *_guide_toggle("📄 키 발급 방법 (CUSTOMER_ID · 액세스라이선스 · 비밀키)", SEARCHAD_GUIDE_MD, scale),
             ft.Row([cid_field, key_field, secret_field]),
             badge,
-            ft.Row([ft.FilledButton("연결 테스트 · 저장", on_click=on_test), delete_button]),
+            ft.Row([test_button, delete_button]),
             status,
         ],
         spacing=8,
     )
 
 
-def _build_sweep_wizard(scale: float, rebuild) -> ft.Control:
+def _build_sweep_wizard(page: ft.Page, scale: float, rebuild) -> ft.Control:
     naver_saved = repo.get_naver_api_settings()
     ad_saved = repo.get_searchad_settings()
     keys_ok = bool(naver_saved and ad_saved)
@@ -560,24 +618,35 @@ def _build_sweep_wizard(scale: float, rebuild) -> ft.Control:
         refresh_status = ft.Text("", size=fs(12, scale))
 
         def on_refresh(e: ft.Event) -> None:
-            try:
-                result = keyword_research.refresh_pool(pool)
-            except keyword_research.NaverApiError as exc:
-                refresh_status.value = f"❌ {exc}"
-                refresh_status.update()
-                return
-            refresh_status.value = f"{result['billed']}개 재측정 완료 ({keyword_research.DOCUMENT_CACHE_DAYS}일간 유효)."
+            refresh_button.disabled = True
+            refresh_button.update()
+            refresh_status.value = "⏳ 재측정하는 중…"
+            refresh_status.color = BRAND_COLORS["text_muted"]
             refresh_status.update()
-            rebuild()
 
-        controls.append(ft.Row([
-            ft.FilledButton(
-                f"🔄 숫자만 새로 재기 ({need}회 호출)" if need else "🔄 숫자만 새로 재기 (전부 최신 · 0회)",
-                on_click=on_refresh,
-                disabled=(not need) or (not keys_ok),
-            ),
-            refresh_status,
-        ]))
+            def _work() -> None:
+                try:
+                    result = keyword_research.refresh_pool(pool)
+                except Exception as exc:  # noqa: BLE001
+                    refresh_status.value = f"❌ {exc}"
+                    refresh_status.color = "#B3261E"
+                    refresh_button.disabled = not keys_ok
+                    refresh_status.update()
+                    refresh_button.update()
+                    return
+                refresh_status.value = f"{result['billed']}개 재측정 완료 ({keyword_research.DOCUMENT_CACHE_DAYS}일간 유효)."
+                refresh_status.color = "#1B6E3C"
+                refresh_status.update()
+                rebuild()
+
+            page.run_thread(_work)
+
+        refresh_button = ft.FilledButton(
+            f"🔄 숫자만 새로 재기 ({need}회 호출)" if need else "🔄 숫자만 새로 재기 (전부 최신 · 0회)",
+            on_click=on_refresh,
+            disabled=(not need) or (not keys_ok),
+        )
+        controls.append(ft.Row([refresh_button, refresh_status]))
 
     controls.append(ft.Divider())
 
@@ -589,21 +658,37 @@ def _build_sweep_wizard(scale: float, rebuild) -> ft.Control:
     seed_error = ft.Text("", size=fs(12, scale), color="#B3261E")
 
     def on_suggest(e: ft.Event) -> None:
-        try:
-            suggested = keyword_curator.suggest_seeds()
-        except Exception as exc:  # noqa: BLE001
-            seed_error.value = f"추천 실패: {exc}"
-            seed_error.update()
-            return
-        if suggested:
-            seed_field.value = ", ".join(suggested)
-            seed_error.value = ""
-        else:
-            seed_error.value = "추천 결과가 비어 있습니다. 직접 입력해주세요."
-        seed_field.update()
+        suggest_button.disabled = True
+        suggest_button.update()
+        seed_error.value = "⏳ 추천 받는 중…"
+        seed_error.color = BRAND_COLORS["text_muted"]
         seed_error.update()
 
-    controls.append(ft.Row([seed_field, ft.OutlinedButton("🪄 브랜드에서 추천", on_click=on_suggest)]))
+        def _work() -> None:
+            try:
+                suggested = keyword_curator.suggest_seeds()
+            except Exception as exc:  # noqa: BLE001
+                seed_error.value = f"추천 실패: {exc}"
+                seed_error.color = "#B3261E"
+                suggest_button.disabled = False
+                seed_error.update()
+                suggest_button.update()
+                return
+            if suggested:
+                seed_field.value = ", ".join(suggested)
+                seed_error.value = ""
+            else:
+                seed_error.value = "추천 결과가 비어 있습니다. 직접 입력해주세요."
+                seed_error.color = "#B3261E"
+            suggest_button.disabled = False
+            seed_field.update()
+            seed_error.update()
+            suggest_button.update()
+
+        page.run_thread(_work)
+
+    suggest_button = ft.OutlinedButton("🪄 브랜드에서 추천", on_click=on_suggest)
+    controls.append(ft.Row([seed_field, suggest_button]))
     controls.append(seed_error)
 
     sweep = repo.get_app_state("sweep") or {}
@@ -683,15 +768,35 @@ def _build_sweep_wizard(scale: float, rebuild) -> ft.Control:
         try:
             min_v = int(vol_min_field.value or keyword_research.DEFAULT_MIN_VOLUME)
             max_v = int(vol_max_field.value or keyword_research.DEFAULT_MAX_VOLUME)
-            found = keyword_research.sweep_candidates(seeds, min_volume=min_v, max_volume=max_v)
-        except keyword_research.NaverApiError as exc:
-            find_status.value = f"❌ {exc}"
+        except ValueError:
+            find_status.value = "검색량 범위는 숫자로 입력하세요."
+            find_status.color = "#B3261E"
             find_status.update()
             return
-        repo.set_app_state("sweep", {"stage": 1, "candidates": found})
-        rebuild()
 
-    controls.append(ft.FilledButton("🔎 1단계 · 후보 찾기 (무료)", on_click=on_find, disabled=not keys_ok))
+        find_button.disabled = True
+        find_button.update()
+        find_status.value = "⏳ 후보를 찾는 중…"
+        find_status.color = BRAND_COLORS["text_muted"]
+        find_status.update()
+
+        def _work() -> None:
+            try:
+                found = keyword_research.sweep_candidates(seeds, min_volume=min_v, max_volume=max_v)
+            except Exception as exc:  # noqa: BLE001
+                find_status.value = f"❌ {exc}"
+                find_status.color = "#B3261E"
+                find_button.disabled = False
+                find_status.update()
+                find_button.update()
+                return
+            repo.set_app_state("sweep", {"stage": 1, "candidates": found})
+            rebuild()
+
+        page.run_thread(_work)
+
+    find_button = ft.FilledButton("🔎 1단계 · 후보 찾기 (무료)", on_click=on_find, disabled=not keys_ok)
+    controls.append(find_button)
     controls.append(find_status)
 
     candidates = sweep.get("candidates")
@@ -717,18 +822,31 @@ def _build_sweep_wizard(scale: float, rebuild) -> ft.Control:
             ))
 
             def on_score(e: ft.Event) -> None:
-                try:
-                    scored = keyword_research.score_candidates(candidates, limit=cap_n)
-                except keyword_research.NaverApiError as exc:
-                    find_status.value = f"❌ {exc}"
-                    find_status.update()
-                    return
-                repo.set_app_state("sweep", {"stage": 2, "candidates": candidates, "scored": scored})
-                rebuild()
+                score_button.disabled = True
+                score_button.update()
+                find_status.value = "⏳ 경쟁도를 조사하는 중…"
+                find_status.color = BRAND_COLORS["text_muted"]
+                find_status.update()
 
-            controls.append(ft.FilledButton(
+                def _work() -> None:
+                    try:
+                        scored = keyword_research.score_candidates(candidates, limit=cap_n)
+                    except Exception as exc:  # noqa: BLE001
+                        find_status.value = f"❌ {exc}"
+                        find_status.color = "#B3261E"
+                        score_button.disabled = False
+                        find_status.update()
+                        score_button.update()
+                        return
+                    repo.set_app_state("sweep", {"stage": 2, "candidates": candidates, "scored": scored})
+                    rebuild()
+
+                page.run_thread(_work)
+
+            score_button = ft.FilledButton(
                 f"💳 2단계 · 경쟁도 조사 ({cost}회 사용)", on_click=on_score, disabled=not keys_ok
-            ))
+            )
+            controls.append(score_button)
 
     scored = sweep.get("scored")
     if stage >= 2 and scored:
@@ -740,14 +858,35 @@ def _build_sweep_wizard(scale: float, rebuild) -> ft.Control:
             rows=[ft.DataRow(cells=[ft.DataCell(ft.Text(str(row.get(k) or ""))) for k in keys]) for row in scored],
         )], scroll=ft.ScrollMode.AUTO))
 
-        def on_propose(e: ft.Event) -> None:
-            result = keyword_curator.propose(scored, current=pool)
-            repo.set_app_state("sweep", {**sweep, "stage": 3, "proposal": result})
-            rebuild()
+        propose_status = ft.Text("", size=fs(12, scale))
 
-        controls.append(ft.FilledButton(
+        def on_propose(e: ft.Event) -> None:
+            propose_button.disabled = True
+            propose_button.update()
+            propose_status.value = "⏳ 브랜드에 맞게 고르는 중…"
+            propose_status.color = BRAND_COLORS["text_muted"]
+            propose_status.update()
+
+            def _work() -> None:
+                try:
+                    result = keyword_curator.propose(scored, current=pool)
+                except Exception as exc:  # noqa: BLE001
+                    propose_status.value = f"❌ {exc}"
+                    propose_status.color = "#B3261E"
+                    propose_button.disabled = False
+                    propose_status.update()
+                    propose_button.update()
+                    return
+                repo.set_app_state("sweep", {**sweep, "stage": 3, "proposal": result})
+                rebuild()
+
+            page.run_thread(_work)
+
+        propose_button = ft.FilledButton(
             "🤖 3단계 · 브랜드에 맞는 것만 고르기", on_click=on_propose, disabled=not keys_ok
-        ))
+        )
+        controls.append(propose_button)
+        controls.append(propose_status)
 
     proposal = sweep.get("proposal")
     revive_checkboxes: list[tuple] = []
@@ -823,14 +962,32 @@ def _build_sweep_wizard(scale: float, rebuild) -> ft.Control:
             def on_apply(e: ft.Event) -> None:
                 revived = [kw for kw, cb in revive_checkboxes if cb.value]
                 final = proposal["accepted"] + revived
-                applied = keyword_curator.apply_and_measure(final, proposal)
-                repo.clear_app_state("sweep")
-                apply_status.value = (
-                    f"✅ SEO 키워드 {applied['pool']}개로 갱신하고 측정까지 마쳤습니다 "
-                    f"(호출 {applied['calls']}회)."
-                )
+
+                apply_button.disabled = True
+                apply_button.update()
+                apply_status.value = "⏳ 적용하고 측정하는 중…"
+                apply_status.color = BRAND_COLORS["text_muted"]
                 apply_status.update()
-                rebuild()
+
+                def _work() -> None:
+                    try:
+                        applied = keyword_curator.apply_and_measure(final, proposal)
+                        repo.clear_app_state("sweep")
+                        apply_status.value = (
+                            f"✅ SEO 키워드 {applied['pool']}개로 갱신하고 측정까지 마쳤습니다 "
+                            f"(호출 {applied['calls']}회)."
+                        )
+                        apply_status.color = "#1B6E3C"
+                        apply_status.update()
+                        rebuild()
+                    except Exception as exc:  # noqa: BLE001 — run_thread로 돌리므로 여기서 안 잡으면 조용히 사라진다
+                        apply_status.value = f"❌ {exc}"
+                        apply_status.color = "#B3261E"
+                        apply_button.disabled = False
+                        apply_status.update()
+                        apply_button.update()
+
+                page.run_thread(_work)
 
             def on_discard(e: ft.Event) -> None:
                 repo.clear_app_state("sweep")
@@ -842,8 +999,9 @@ def _build_sweep_wizard(scale: float, rebuild) -> ft.Control:
                 "(위에서 되살린 항목은 여기에 더해집니다)",
                 size=fs(12, scale),
             ))
+            apply_button = ft.FilledButton("✅ 4단계 · 적용", on_click=on_apply, disabled=not keys_ok)
             controls.append(ft.Row([
-                ft.FilledButton("✅ 4단계 · 적용", on_click=on_apply, disabled=not keys_ok),
+                apply_button,
                 ft.OutlinedButton("무시하고 버리기", on_click=on_discard),
             ]))
             controls.append(apply_status)
@@ -851,34 +1009,50 @@ def _build_sweep_wizard(scale: float, rebuild) -> ft.Control:
     return ft.Column(controls, spacing=8)
 
 
-def _build_keyword_diagnostic_section(scale: float) -> ft.Control:
+def _build_keyword_diagnostic_section(page: ft.Page, scale: float) -> ft.Control:
     pool = repo.get_brand_kit().get("seo_keywords") or []
     naver_saved = repo.get_naver_api_settings()
     result_box = ft.Container()
     status = ft.Text("", size=fs(12, scale), color="#B3261E")
 
     def on_run(e: ft.Event) -> None:
-        try:
-            ranked = keyword_research.rank_keywords(pool)
-        except keyword_research.NaverApiError as exc:
-            status.value = f"❌ {exc}"
-            status.update()
-            return
-        status.value = ""
+        run_button.disabled = True
+        run_button.update()
+        status.value = "⏳ 진단하는 중…"
+        status.color = BRAND_COLORS["text_muted"]
         status.update()
-        if not ranked:
-            result_box.content = ft.Text("결과가 없습니다.", size=fs(12, scale))
-        else:
-            columns = ["키워드", "월간 검색량", "트렌드(상대)", "블로그 문서 수", "점수"]
-            keys = ["keyword", "estimated_volume", "demand", "documents", "score"]
-            result_box.content = ft.Column([ft.DataTable(
-                columns=[ft.DataColumn(ft.Text(c)) for c in columns],
-                rows=[
-                    ft.DataRow(cells=[ft.DataCell(ft.Text(str(row.get(k) or ""))) for k in keys])
-                    for row in ranked
-                ],
-            )], scroll=ft.ScrollMode.AUTO)
-        result_box.update()
+
+        def _work() -> None:
+            try:
+                ranked = keyword_research.rank_keywords(pool)
+            except Exception as exc:  # noqa: BLE001
+                status.value = f"❌ {exc}"
+                status.color = "#B3261E"
+                run_button.disabled = False
+                status.update()
+                run_button.update()
+                return
+            status.value = ""
+            run_button.disabled = False
+            status.update()
+            run_button.update()
+            if not ranked:
+                result_box.content = ft.Text("결과가 없습니다.", size=fs(12, scale))
+            else:
+                columns = ["키워드", "월간 검색량", "트렌드(상대)", "블로그 문서 수", "점수"]
+                keys = ["keyword", "estimated_volume", "demand", "documents", "score"]
+                result_box.content = ft.Column([ft.DataTable(
+                    columns=[ft.DataColumn(ft.Text(c)) for c in columns],
+                    rows=[
+                        ft.DataRow(cells=[ft.DataCell(ft.Text(str(row.get(k) or ""))) for k in keys])
+                        for row in ranked
+                    ],
+                )], scroll=ft.ScrollMode.AUTO)
+            result_box.update()
+
+        page.run_thread(_work)
+
+    run_button = ft.OutlinedButton("키워드 진단 실행", on_click=on_run)
 
     body: list[ft.Control] = [
         ft.Text(
@@ -892,20 +1066,20 @@ def _build_keyword_diagnostic_section(scale: float) -> ft.Control:
         body.append(ft.Text("먼저 위에서 키를 등록하세요.", size=fs(12, scale)))
     else:
         body.append(ft.Text(f"대상 {len(pool)}개: {', '.join(pool)}", size=fs(12, scale)))
-        body.append(ft.OutlinedButton("키워드 진단 실행", on_click=on_run))
+        body.append(run_button)
         body.append(status)
         body.append(result_box)
     return ft.Column(body, spacing=8)
 
 
-def _build_naver_tab(scale: float) -> ft.Control:
+def _build_naver_tab(page: ft.Page, scale: float) -> ft.Control:
     wizard_box = ft.Container()
 
     def rebuild() -> None:
-        wizard_box.content = _build_sweep_wizard(scale, rebuild)
+        wizard_box.content = _build_sweep_wizard(page, scale, rebuild)
         wizard_box.update()
 
-    wizard_box.content = _build_sweep_wizard(scale, rebuild)
+    wizard_box.content = _build_sweep_wizard(page, scale, rebuild)
 
     return ft.Column(
         [
@@ -913,9 +1087,9 @@ def _build_naver_tab(scale: float) -> ft.Control:
                 "블로그·뉴스·카페 검색과 검색어트렌드, 절대 검색량·연관키워드 발굴을 담당합니다.",
                 size=fs(12, scale), color=BRAND_COLORS["text_muted"],
             ),
-            _build_api_hub_section(scale),
+            _build_api_hub_section(page, scale),
             ft.Divider(),
-            _build_searchad_section(scale),
+            _build_searchad_section(page, scale),
             ft.Divider(),
             ft.Text("🔑 키워드 갱신", weight=ft.FontWeight.BOLD, size=fs(16, scale)),
             ft.Text(
@@ -924,7 +1098,7 @@ def _build_naver_tab(scale: float) -> ft.Control:
             ),
             wizard_box,
             ft.Divider(),
-            _build_keyword_diagnostic_section(scale),
+            _build_keyword_diagnostic_section(page, scale),
         ],
         spacing=10,
         scroll=ft.ScrollMode.AUTO,
@@ -1129,8 +1303,8 @@ def build(page: ft.Page, state: AppState) -> ft.Control:
                         ft.TabBarView(
                             expand=True,
                             controls=[
-                                ft.Container(content=_build_llm_tab(scale), padding=10),
-                                ft.Container(content=_build_naver_tab(scale), padding=10),
+                                ft.Container(content=_build_llm_tab(page, scale), padding=10),
+                                ft.Container(content=_build_naver_tab(page, scale), padding=10),
                                 ft.Container(content=_build_vision_tab(scale), padding=10),
                                 ft.Container(content=_build_usage_tab(scale), padding=10),
                             ],

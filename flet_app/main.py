@@ -18,6 +18,19 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
+# Windows에서 콘솔(터미널)이 없거나(예: 더블클릭 실행, 빌드된 exe) 로케일이
+# 영어가 아니면, sys.stdout/stderr의 기본 인코딩이 UTF-8이 아닌 legacy
+# 코드페이지(한국어 환경은 cp949)로 잡힌다. 이 앱과 ai_workers/*의 print()들은
+# 이모지 등 그 코드페이지에 없는 문자를 자주 찍는데, 인코딩 못 하면
+# UnicodeEncodeError가 그 print() 호출부를 그대로 깨뜨린다 — 콘솔 로그 하나
+# 때문에 실제 생성 파이프라인 전체가 조용히 실패하는 식으로 나타났다
+# (ai_workers/content_writer.py의 _report()에서 실제로 재현됨). errors="replace"로
+# 재설정해 두면 문자가 안 예쁘게 나올 수는 있어도 여기서 예외가 나는 일은
+# 없다. reconfigure()가 없는 극히 오래된 스트림 대비 hasattr로 방어.
+for _stream in (sys.stdout, sys.stderr):
+    if hasattr(_stream, "reconfigure"):
+        _stream.reconfigure(encoding="utf-8", errors="replace")
+
 import flet as ft
 
 # flet_app/ sits next to core/ and ai_workers/ at the project root, so make
@@ -50,7 +63,6 @@ DESTINATIONS = [
     (ft.Icons.STYLE_OUTLINED, ft.Icons.STYLE, "브랜드 킷", brand_kit_view),
     (ft.Icons.SEND_OUTLINED, ft.Icons.SEND, "네이버 게시", naver_publish_view),
     (ft.Icons.SETTINGS_OUTLINED, ft.Icons.SETTINGS, "설정 · 토큰", settings_view),
-    (ft.Icons.DESCRIPTION_OUTLINED, ft.Icons.DESCRIPTION, "구축 보고서", None),
 ]
 DEFAULT_INDEX = 3  # 🧵 브랜드 킷
 WORKBENCH_INDEX = 1  # DESTINATIONS 안 "워크벤치" 위치 — state.navigate_to_workbench가 씀
