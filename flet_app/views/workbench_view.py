@@ -142,7 +142,13 @@ def _build_sim_panel(campaign_id: str, scale: float, sim_state: dict, refresh_si
 
 def build(page: ft.Page, state: AppState) -> ft.Control:
     scale = state.font_scale
-    content_box = ft.Container(expand=True)
+    # top=8: 뉴스 큐레이션에서 온 콘텐츠는 title_field 위에 "📰 원문 ..." 텍스트가
+    # 먼저 오지만, 일반(수동) 콘텐츠는 title_field가 스크롤 영역 맨 위 첫
+    # 컨트롤이 된다 — Material 텍스트필드의 라벨은 값이 있을 때 테두리
+    # 위쪽으로 떠오르는데, 위에 여백이 전혀 없으면 그 라벨 글자가 컨테이너
+    # 위 경계에 잘려 반만 보인다(실제로 재현됨). 약간의 위쪽 패딩만으로
+    # 라벨이 뜰 공간을 확보한다.
+    content_box = ft.Container(expand=True, padding=ft.Padding(top=8))
     sim_box = ft.Container(expand=True)
     sim_state = {"channel": "naver", "is_mobile": False, "show_dead_zone": True}
     selector = ft.Dropdown(expand=True, label="작업할 콘텐츠")
@@ -251,6 +257,17 @@ def _build_campaign_editor(page: ft.Page, campaign_id: str, scale: float, reload
             "판정으로 검색에서 빠집니다.",
             size=fs(11, scale), color=BRAND_COLORS["text_muted"],
         ))
+
+    if not controls:
+        # 뉴스 큐레이션에서 온 콘텐츠는 title_field 앞에 위 원문/원 기사 제목
+        # 텍스트가 먼저 오지만, 일반(수동) 콘텐츠는 title_field가 스크롤
+        # 영역의 진짜 첫 컨트롤이 된다 — 컨테이너에 top padding을 줘도
+        # (Container(expand=True, padding=...) 안의 스크롤 가능한 Column이
+        # 그 padding을 반영하지 않는 것으로 라이브에서 확인됨) 라벨이 위쪽에
+        # 잘리는 게 그대로였다. 그래서 padding에 기대는 대신, 실제로 자리를
+        # 차지하는 빈 컨트롤을 title_field 앞에 둔다 — 이러면 어떤 레이아웃
+        # 계산이든 title_field가 더 이상 "맨 위 첫 컨트롤"이 아니게 된다.
+        controls.append(ft.Container(height=4))
 
     title_field = ft.TextField(
         label="제목", value=campaign.get("title") or "",

@@ -337,7 +337,7 @@ def _build_llm_tab(page: ft.Page, scale: float) -> ft.Control:
     )
 
 
-def _build_api_hub_section(page: ft.Page, scale: float) -> ft.Control:
+def _build_api_hub_section(page: ft.Page, scale: float, rebuild) -> ft.Control:
     saved = repo.get_naver_api_settings()
 
     id_field = ft.TextField(
@@ -425,6 +425,12 @@ def _build_api_hub_section(page: ft.Page, scale: float) -> ft.Control:
                 id_field.update()
                 secret_field.update()
                 _refresh_stats()
+                # 아래 "키워드 갱신" 마법사의 버튼은 이 탭이 처음 그려질 때의
+                # keys_ok 값으로 disabled가 고정된다 — 여기서 키를 새로
+                # 저장해도 마법사 쪽엔 반영이 안 돼서, 등록 직후엔 다른
+                # 메뉴로 갔다 와야만 버튼이 눌리는 문제가 있었다. 저장에
+                # 성공한 지금 마법사를 다시 그려서 바로 반영한다.
+                rebuild()
             except Exception as exc:  # noqa: BLE001 — run_thread로 돌리므로 여기서 안 잡으면 조용히 사라진다
                 status.value = f"❌ {exc}"
                 status.color = "#B3261E"
@@ -447,6 +453,7 @@ def _build_api_hub_section(page: ft.Page, scale: float) -> ft.Control:
         badge.update()
         delete_button.update()
         _refresh_stats()
+        rebuild()
 
     delete_button.on_click = on_delete
     test_button = ft.FilledButton("연결 테스트 · 저장", on_click=on_test)
@@ -484,7 +491,7 @@ def _build_api_hub_section(page: ft.Page, scale: float) -> ft.Control:
     )
 
 
-def _build_searchad_section(page: ft.Page, scale: float) -> ft.Control:
+def _build_searchad_section(page: ft.Page, scale: float, rebuild) -> ft.Control:
     saved = repo.get_searchad_settings()
 
     cid_field = ft.TextField(label="CUSTOMER_ID", hint_text="저장됨" if saved else "7자리 숫자", expand=True)
@@ -545,6 +552,12 @@ def _build_searchad_section(page: ft.Page, scale: float) -> ft.Control:
                 cid_field.update()
                 key_field.update()
                 secret_field.update()
+                # 아래 "키워드 갱신" 마법사의 버튼은 이 탭이 처음 그려질 때의
+                # keys_ok 값으로 disabled가 고정된다 — 여기서 키를 새로
+                # 저장해도 마법사 쪽엔 반영이 안 돼서, 등록 직후엔 다른
+                # 메뉴로 갔다 와야만 버튼이 눌리는 문제가 있었다. 저장에
+                # 성공한 지금 마법사를 다시 그려서 바로 반영한다.
+                rebuild()
             except Exception as exc:  # noqa: BLE001 — run_thread로 돌리므로 여기서 안 잡으면 조용히 사라진다
                 status.value = f"❌ {exc}"
                 status.color = "#B3261E"
@@ -566,6 +579,7 @@ def _build_searchad_section(page: ft.Page, scale: float) -> ft.Control:
         status.update()
         badge.update()
         delete_button.update()
+        rebuild()
 
     delete_button.on_click = on_delete
     test_button = ft.FilledButton("연결 테스트 · 저장", on_click=on_test)
@@ -1087,9 +1101,9 @@ def _build_naver_tab(page: ft.Page, scale: float) -> ft.Control:
                 "블로그·뉴스·카페 검색과 검색어트렌드, 절대 검색량·연관키워드 발굴을 담당합니다.",
                 size=fs(12, scale), color=BRAND_COLORS["text_muted"],
             ),
-            _build_api_hub_section(page, scale),
+            _build_api_hub_section(page, scale, rebuild),
             ft.Divider(),
-            _build_searchad_section(page, scale),
+            _build_searchad_section(page, scale, rebuild),
             ft.Divider(),
             ft.Text("🔑 키워드 갱신", weight=ft.FontWeight.BOLD, size=fs(16, scale)),
             ft.Text(
