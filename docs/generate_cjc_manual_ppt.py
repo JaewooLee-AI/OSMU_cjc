@@ -133,6 +133,23 @@ def tag(slide, x, y, w, h, text, color):
              align=PP_ALIGN.CENTER, anchor=MSO_ANCHOR.MIDDLE)
 
 
+def add_screenshot(slide, path, x, y, w, caption=None, cap_color=PRIMARY):
+    """실제 화면 캡처를 얇은 테두리로 감싸 붙인다. 세로 길이는 이미지의
+    실제 가로세로비로 계산한다 — 화면마다 높이가 조금씩 달라서(글자 크기
+    슬라이더·탭 줄바꿈 등) 고정 비율로 넣으면 위아래가 눌리거나 잘린다."""
+    from PIL import Image
+    with Image.open(path) as im:
+        iw, ih = im.size
+    h = w * ih / iw
+    cap_h = Inches(0.32) if caption else 0
+    pad = Pt(3)
+    add_rect(slide, x - pad, y + cap_h - pad, w + pad * 2, h + pad * 2, TEXT_MUTED)
+    slide.shapes.add_picture(path, x, y + cap_h, width=w, height=h)
+    if caption:
+        add_text(slide, x, y, w, cap_h, caption, size=12, color=cap_color, bold=True)
+    return h + cap_h
+
+
 def style_table(table, header_color=PRIMARY_DARK, col_widths=None, header_size=12.5, body_size=11.5):
     n_rows, n_cols = len(table.rows), len(table.columns)
     if col_widths:
@@ -467,6 +484,46 @@ for t, tagcolor, tagtxt, d in steps5:
     y += Inches(1.03)
 
 # ============================================================
+# 11-1. 실제 화면 (1/3) — 씨앗 입력 → 1단계 결과
+# ============================================================
+IMG = "docs/"
+s = new_slide()
+header_bar(s, "② 키워드 갱신 · 실제 화면 (1/3)", "씨앗 입력 → 1단계 · 후보 찾기")
+add_screenshot(s, IMG + "naver_kw_01_start.png", Inches(0.55), Inches(1.5), Inches(5.85),
+               caption="씨앗 키워드 입력 전 — [1단계 · 후보 찾기]만 눌러보면 됩니다")
+add_screenshot(s, IMG + "naver_kw_02_stage1_result.png", Inches(6.85), Inches(1.5), Inches(5.85),
+               caption="1단계 실행 후 — 후보 507개 발견, [2단계] 버튼이 새로 나타남")
+add_text(s, Inches(0.55), Inches(6.35), Inches(12.2), Inches(0.5),
+         "무료 단계입니다 — 눌러도 과금되지 않습니다. 씨앗은 브랜드 이름이 아니라 실제 검색어여야 합니다.",
+         size=11.5, color=TEXT_MUTED)
+
+# ============================================================
+# 11-2. 실제 화면 (2/3) — 2단계 결과
+# ============================================================
+s = new_slide()
+header_bar(s, "② 키워드 갱신 · 실제 화면 (2/3)", "2단계 · 경쟁도 조사 결과")
+add_screenshot(s, IMG + "naver_kw_03_stage2_result.png", Inches(3.2), Inches(1.5), Inches(7.0),
+               caption="키워드별 검색량 · 경쟁 문서 수 · 점수가 표로 나옵니다")
+add_bullets(s, Inches(0.55), Inches(1.5), Inches(2.5), Inches(4.5), [
+    (0, "검색량이 높고 점수가 낮을수록(경쟁이 약할수록) 좋은 키워드입니다.", False),
+    (0, "이 단계가 유일하게 유료 API HUB 호출을 씁니다.", False),
+    (0, "표 아래로 스크롤하면 [3단계] 버튼이 있습니다.", False),
+], size=12, space_after=14, line_spacing=1.3)
+
+# ============================================================
+# 11-3. 실제 화면 (3/3) — 3단계 결과 + 4단계 적용
+# ============================================================
+s = new_slide()
+header_bar(s, "② 키워드 갱신 · 실제 화면 (3/3)", "3단계 · 브랜드 판정 → 4단계 · 적용")
+add_screenshot(s, IMG + "naver_kw_04_stage3_result.png", Inches(0.55), Inches(1.5), Inches(5.85),
+               caption="AI가 구매 직결/잠재 고객/사업 부문별로 분류 — '='는 기존 유지, '+'는 신규 추가")
+add_screenshot(s, IMG + "naver_kw_05_stage34_apply.png", Inches(6.85), Inches(1.5), Inches(5.85),
+               caption="제외된 키워드는 체크박스로 되살릴 수 있음 — [4단계 · 적용]을 눌러야 실제로 반영됨")
+add_text(s, Inches(0.55), Inches(6.45), Inches(12.2), Inches(0.5),
+         "⚠️ 여기서 [4단계 · 적용]을 누르기 전까지는 브랜드 킷의 SEO 키워드가 전혀 바뀌지 않습니다.",
+         size=11.5, color=WARN, bold=True)
+
+# ============================================================
 # 12. 평소/분기 루틴 + 캐시
 # ============================================================
 s = new_slide()
@@ -663,6 +720,6 @@ add_bullets(s, Inches(0.9), Inches(4.0), Inches(11.2), Inches(2.4), [
     (0, "문의: 씨제이씨협동조합 02-6396-3388 · cjc@cjccoop.com", False),
 ], size=15, color=RGBColor(0xF5, 0xED, 0xD7), space_after=14, muted=RGBColor(0xD8, 0xC6, 0xCE))
 
-out_path = "/Users/jwlee/project/OSMU_cjc/docs/CJC_OSMU_사용자_매뉴얼.pptx"
+out_path = "docs/CJC_OSMU_사용자_매뉴얼.pptx"
 prs.save(out_path)
 print("Saved:", out_path, "| slides:", len(prs.slides._sldIdLst))
