@@ -235,7 +235,7 @@ add_text(s, Inches(0.9), Inches(5.5), Inches(10.5), Inches(0.9),
          "홈페이지 atumkorea.com · 네이버 블로그 jwl1722 · 대표 02-6396-3388",
          size=13, color=RGBColor(0xF5, 0xED, 0xD7))
 add_text(s, Inches(0.9), Inches(6.6), Inches(9), Inches(0.5),
-         "앱 실행: streamlit run app.py → http://localhost:8501",
+         "앱 실행: python flet_app/main.py (또는 빌드된 Windows 실행 파일)",
          size=12, color=TEXT_MUTED)
 
 # ============================================================
