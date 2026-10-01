@@ -429,7 +429,7 @@ add_rect(s, Inches(6.85), Inches(1.5), Inches(5.9), Inches(4.5), WHITE)
 add_text(s, Inches(7.1), Inches(1.65), Inches(5.4), Inches(0.4), "키 없이도 되는 것", size=14, color=GOOD, bold=True)
 add_bullets(s, Inches(7.1), Inches(2.1), Inches(5.4), Inches(3.7), [
     (0, "초안 생성·4채널 카피·컴플라이언스 검수 (LLM 키만 있으면)", False),
-    (0, "뉴스 큐레이션 — API 없이 직접 조회라 완전 무료", False),
+    (0, "뉴스 큐레이션 — 평소엔 직접 조회라 무료, 막히면 API HUB로 자동 전환(유료)", False),
     (0, "네이버 게시 — 로그인 세션 방식이라 API 키 불필요", False),
     (0, "브랜드 킷 편집 — 수동으로 키워드 입력 가능", False),
 ], size=12, space_after=10, line_spacing=1.25)
@@ -567,6 +567,34 @@ for i, (t, d) in enumerate(steps, start=1):
     y += Inches(1.08)
 
 # ============================================================
+# 13-1. SNS 자동 검증 & 다시 만들기
+# ============================================================
+s = new_slide()
+header_bar(s, "③ 매일 쓰는 법 · 워크벤치 (2/2)", "SNS 자동 검증 & 다시 만들기")
+add_text(s, Inches(0.55), Inches(1.4), Inches(12.2), Inches(0.4),
+         "초안 생성 직후 인스타·X·쇼츠·발행 태그는 길이·해시태그·인증 표현을 자동으로 점검·정리합니다.",
+         size=13, color=TEXT_MUTED)
+colw = Inches(5.95)
+add_rect(s, Inches(0.55), Inches(2.0), colw, Inches(1.9), WHITE)
+add_text(s, Inches(0.8), Inches(2.2), colw - Inches(0.5), Inches(0.35), "📸 인스타그램 · 🐦 X", size=14, color=PRIMARY, bold=True)
+add_bullets(s, Inches(0.8), Inches(2.6), colw - Inches(0.5), Inches(1.2), [
+    (0, "'더보기' 전 노출 범위(앞 125자·최대 2줄) 초과 시 경고, 해시태그는 8~15개로 자동 보정.", False),
+    (0, "X는 한글 1자를 2로 세는 실제 기준(최대 280)으로 자동 분할 — 시뮬레이터도 같은 기준.", False),
+], size=12, space_after=8, line_spacing=1.25)
+add_rect(s, Inches(6.85), Inches(2.0), colw, Inches(1.9), WHITE)
+add_text(s, Inches(7.1), Inches(2.2), colw - Inches(0.5), Inches(0.35), "🎬 쇼츠 · 🏷️ 발행 태그", size=14, color=PRIMARY, bold=True)
+add_bullets(s, Inches(7.1), Inches(2.6), colw - Inches(0.5), Inches(1.2), [
+    (0, "컷 자막이 20자를 넘으면 경고하고, 제목에는 #shorts를 자동으로 붙입니다.", False),
+    (0, "발행 태그는 7~12개로 정리하고, 모자라면 이 글의 타깃 키워드로 채웁니다.", False),
+], size=12, space_after=8, line_spacing=1.25)
+add_rect(s, Inches(0.55), Inches(4.2), Inches(12.2), Inches(1.3), CARD_GOLD)
+add_text(s, Inches(0.85), Inches(4.4), Inches(11.6), Inches(0.4), "📣 본문을 고친 뒤에는", size=13.5, color=TEXT, bold=True)
+add_text(s, Inches(0.85), Inches(4.85), Inches(11.6), Inches(0.55),
+         "인스타·X·쇼츠·발행 태그는 '수정 전 본문 기준'으로 표시됩니다 — 워크벤치의 [📣 SNS 3채널 다시 만들기]를 눌러 "
+         "최신 본문에 맞게 다시 만드세요. 인증 범위를 넘겨 쓴 문장은 자동 삭제되고, 맞춤법은 세 채널을 한 번에 교정합니다.",
+         size=12, color=TEXT, line_spacing=1.3)
+
+# ============================================================
 # 14. 뉴스 + 게시
 # ============================================================
 s = new_slide()
@@ -574,7 +602,8 @@ header_bar(s, "③ 매일 쓰는 법 · 뉴스와 게시", "뉴스 큐레이션 
 add_text(s, Inches(0.55), Inches(1.4), Inches(5.9), Inches(0.4), "📰 뉴스 큐레이션", size=15, color=PRIMARY, bold=True)
 add_bullets(s, Inches(0.55), Inches(1.85), Inches(5.9), Inches(2.8), [
     (0, "브랜드 키워드로 관련 기사를 찾아 [워크벤치로 전달]합니다.", False),
-    (0, "Google 뉴스 RSS + 네이버 뉴스 직접 조회 — API 키 없이 완전 무료입니다.", True),
+    (0, "Google 뉴스 RSS + 네이버 뉴스 직접 조회가 기본입니다. 조회가 막히면 등록된 네이버 API HUB 키로 "
+        "자동 전환되고(유료), 오늘 호출에 집계됩니다.", True),
     (0, "뉴스 기반 글은 본문 끝에 원문 링크가 자동으로 붙습니다.", False),
     (0, "추가 검색어 예시: '탈모 관리, 항암가발 지원, 소상공인 창업교육'.", False),
 ], size=12, space_after=9, line_spacing=1.25)
@@ -600,7 +629,7 @@ rows = [
     ("섹션", "무엇을 하나"),
     ("🏢 기업·채널", "조합명·키노피스·업종·홈페이지·블로그 ID — 글의 톤과 게시 대상에 반영"),
     ("🛡️ 가드레일 토글", "끄면 검수 없이 발행. 끌 이유는 거의 없음"),
-    ("🏭 핵심 팩트", "초안마다 2개 이상 자동 인용. 여기 없는 수치·인증은 AI가 지어내지 않음"),
+    ("🏭 핵심 팩트", "이 글과 관련 있을 때만 0~2개 인용(최근 글과 반복 안 함). 여기 없는 수치·인증은 AI가 지어내지 않음"),
     ("📖 용어집", "키노피스·ATUM 등 표기 통일 + 교정 보호"),
     ("🎚️ 기본 콘텐츠 모드", "따로 지정 안 한 글의 기본값 (검색 최적화 ↔ 내용 우선)"),
     ("🔍 SEO 키워드", "제목·본문 배치 대상 + 전환 가중치 + 검색 타깃 여부"),
