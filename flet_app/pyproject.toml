@@ -23,3 +23,11 @@ dependencies = [
 product = "OSMU CJC 워크벤치"
 org = "cjc"
 company = "cjc"
+
+# flet 1.0.2의 빌드 템플릿은 Flutter 패키지 jni를 1.0.0으로 고정(override)하는데,
+# 2026-10-06에 나온 jni_flutter 1.0.4+1은 jni ^1.1.0을 요구해 Dart 컴파일이
+# "Constant evaluation error"로 깨졌다(10/02 빌드는 성공, 10/15 빌드 실패).
+# 성공했던 빌드가 쓰던 1.0.4(jni ^1.0.0)로 고정한다. flet을 jni 1.1.0을 쓰는
+# 버전으로 올릴 때 이 고정도 같이 풀면 된다.
+[tool.flet.flutter.pubspec.dependency_overrides]
+jni_flutter = "1.0.4"
