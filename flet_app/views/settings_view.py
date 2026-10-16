@@ -23,6 +23,7 @@ from __future__ import annotations
 import flet as ft
 
 from ai_workers import keyword_curator, keyword_research, vision
+from ai_workers.content_writer import SNS_CHANNELS, enabled_channels
 from ai_workers.multi_llm_router import VENDORS, test_connection, vision_capable_vendors
 from core import repo
 from core.crypto_utils import decrypt_api_key, encrypt_api_key
@@ -1511,6 +1512,47 @@ def _build_usage_tab(scale: float) -> ft.Control:
     )
 
 
+def _build_channels_tab(scale: float) -> ft.Control:
+    """📣 생성 채널 — 초안을 만들 때 함께 만들 SNS 채널을 고릅니다.
+
+    네이버 블로그 본문은 항상 만듭니다: 인스타·X·쇼츠 글은 그 본문(검수까지 마친 사실)을
+    원문으로 삼아 쓰기 때문입니다. 끈 채널은 작성·검수 호출을 아예 하지 않아, 운영하지 않는
+    채널에 매 글마다 AI 비용이 나가지 않습니다. 이미 만들어 둔 내용은 지우지 않습니다.
+    """
+    active = set(enabled_channels(repo.get_brand_kit()))
+    checks = {key: ft.Checkbox(label=label, value=key in active) for key, label in SNS_CHANNELS.items()}
+    status = ft.Text("", size=fs(12, scale))
+
+    def on_save(e: ft.Event) -> None:
+        chosen = [key for key, cb in checks.items() if cb.value]
+        repo.save_brand_kit(enabled_channels=chosen)
+        names = ", ".join(SNS_CHANNELS[k] for k in chosen) if chosen else "SNS 채널 없음"
+        status.value = f"✅ 저장했습니다 — 네이버 블로그 + {names}. 다음 초안 생성부터 적용됩니다."
+        status.color = "#1B6E3C"
+        status.update()
+
+    return ft.Column(
+        [
+            ft.Text(
+                "초안을 만들 때 함께 만들 채널을 고릅니다. 끈 채널은 AI 호출을 하지 않아 비용이 들지 않고, "
+                "워크벤치 미리보기와 결과 탭에서도 빠집니다. 이미 만들어 둔 내용은 지우지 않습니다.",
+                size=fs(12, scale), color=BRAND_COLORS["text_muted"],
+            ),
+            ft.Checkbox(label="📗 네이버 블로그 (항상 생성)", value=True, disabled=True),
+            ft.Text(
+                "네이버 블로그 본문은 끌 수 없습니다 — 인스타·X·쇼츠 글이 이 본문을 원문으로 삼아 만들어집니다.",
+                size=fs(11, scale), color=BRAND_COLORS["text_muted"],
+            ),
+            *checks.values(),
+            ft.FilledButton("저장", on_click=on_save),
+            status,
+        ],
+        spacing=10,
+        scroll=ft.ScrollMode.AUTO,
+        expand=True,
+    )
+
+
 def build(page: ft.Page, state: AppState) -> ft.Control:
     scale = state.font_scale
     return ft.Column(
@@ -1518,7 +1560,7 @@ def build(page: ft.Page, state: AppState) -> ft.Control:
             ft.Text("설정 · 토큰", size=fs(24, scale), weight=ft.FontWeight.BOLD),
             _build_font_scale_section(state, scale),
             ft.Tabs(
-                length=4,
+                length=5,
                 expand=True,
                 content=ft.Column(
                     expand=True,
@@ -1526,6 +1568,7 @@ def build(page: ft.Page, state: AppState) -> ft.Control:
                         ft.TabBar(
                             tabs=[
                                 ft.Tab(label="🔑 LLM 벤더"),
+                                ft.Tab(label="📣 생성 채널"),
                                 ft.Tab(label="🔍 네이버 API"),
                                 ft.Tab(label="🖼️ 이미지 분석 (토큰)"),
                                 ft.Tab(label="📈 사용량"),
@@ -1535,6 +1578,7 @@ def build(page: ft.Page, state: AppState) -> ft.Control:
                             expand=True,
                             controls=[
                                 ft.Container(content=_build_llm_tab(page, scale), padding=10),
+                                ft.Container(content=_build_channels_tab(scale), padding=10),
                                 ft.Container(content=_build_naver_tab(page, scale), padding=10),
                                 ft.Container(content=_build_vision_tab(scale), padding=10),
                                 ft.Container(content=_build_usage_tab(scale), padding=10),

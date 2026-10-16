@@ -33,6 +33,7 @@ _BRAND_KIT_JSON_COLS = {
     "seo_keywords": [],
     "keyword_weights": {},
     "non_target_keywords": [],
+    "enabled_channels": ["instagram", "x", "shorts"],
     "blacklist_map": {},
 }
 

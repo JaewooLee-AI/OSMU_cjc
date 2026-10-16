@@ -19,7 +19,13 @@ import time
 import flet as ft
 
 from ai_workers import content_mode, factsheet, vision
-from ai_workers.content_writer import LENGTH_MODES, regenerate_sns, revise_content, run_pipeline
+from ai_workers.content_writer import (
+    LENGTH_MODES,
+    enabled_channels,
+    regenerate_sns,
+    revise_content,
+    run_pipeline,
+)
 from ai_workers.sns_validator import TWEET_HARD_MAX, x_weighted_length
 from core import repo, storage
 
@@ -90,11 +96,15 @@ def _build_sim_panel(campaign_id: str, scale: float, sim_state: dict, refresh_si
         return ft.Text("작업할 콘텐츠를 선택하세요.", size=fs(12, scale), color=BRAND_COLORS["text_muted"])
 
     brand_kit = repo.get_brand_kit()
+    # 꺼진 채널은 미리보기에서도 뺍니다 (⚙️ 설정 → 📣 생성 채널). 네이버 블로그는 항상 있습니다.
+    active = set(enabled_channels(brand_kit)) | {"naver"}
+    if sim_state["channel"] not in active:
+        sim_state["channel"] = "naver"
 
     channel_group = ft.RadioGroup(
         value=sim_state["channel"],
         content=ft.Row(
-            [ft.Radio(value=k, label=f"{v['icon']} {v['label']}") for k, v in sim.CHANNELS.items()],
+            [ft.Radio(value=k, label=f"{v['icon']} {v['label']}") for k, v in sim.CHANNELS.items() if k in active],
             wrap=True,
         ),
     )
@@ -626,14 +636,14 @@ def _build_campaign_editor(page: ft.Page, campaign_id: str, scale: float, reload
         if (campaign.get("guardrail_report") or {}).get("sns_stale"):
             sns_status = ft.Text("", size=fs(12, scale))
             sns_spinner = ft.ProgressRing(width=16, height=16, stroke_width=2, visible=False)
-            sns_button = ft.FilledButton("📣 SNS 3채널 다시 만들기 (현재 본문 기준)", disabled=is_processing)
+            sns_button = ft.FilledButton("📣 SNS 채널 다시 만들기 (현재 본문 기준)", disabled=is_processing)
 
             def on_regen_sns(e: ft.Event) -> None:
                 sns_button.disabled = True
                 sns_button.update()
                 sns_spinner.visible = True
                 sns_spinner.update()
-                sns_status.value = "⏳ 인스타·X·쇼츠·발행 태그를 다시 만드는 중…"
+                sns_status.value = "⏳ 켜 둔 SNS 채널과 발행 태그를 다시 만드는 중…"
                 sns_status.color = BRAND_COLORS["text_muted"]
                 sns_status.update()
 
@@ -662,7 +672,7 @@ def _build_campaign_editor(page: ft.Page, campaign_id: str, scale: float, reload
             sns_button.on_click = on_regen_sns
             controls += [
                 _status_box(
-                    "📣 인스타·X·쇼츠가 수정 전 본문 기준입니다 — 본문에서 바꾼 날짜·가격·내용이 SNS에는 "
+                    "📣 SNS 글이 수정 전 본문 기준입니다 — 본문에서 바꾼 날짜·가격·내용이 SNS에는 "
                     "반영돼 있지 않습니다. 게시 전에 다시 만드세요.",
                     scale, "warning",
                 ),
@@ -905,22 +915,24 @@ def _build_channel_tabs(page: ft.Page, campaign: dict, title_field: ft.TextField
     else:
         shorts_tab = ft.Text("쇼츠 구성안이 아직 없습니다.", size=fs(12, scale), color=BRAND_COLORS["text_muted"])
 
+    # 꺼진 채널은 탭에서도 뺍니다 (⚙️ 설정 → 📣 생성 채널).
+    active = set(enabled_channels(repo.get_brand_kit()))
+    tabs = [("네이버 본문", naver_tab)]
+    for key, label, tab in (
+        ("instagram", "인스타 캡션", ig_tab),
+        ("x", "X 스레드", x_tab),
+        ("shorts", "쇼츠 자막", shorts_tab),
+    ):
+        if key in active:
+            tabs.append((label, tab))
     return ft.Tabs(
-        length=4,
+        length=len(tabs),
         height=560,
         content=ft.Column(
             expand=True,
             controls=[
-                ft.TabBar(tabs=[
-                    ft.Tab(label="네이버 본문"), ft.Tab(label="인스타 캡션"),
-                    ft.Tab(label="X 스레드"), ft.Tab(label="쇼츠 자막"),
-                ]),
-                ft.TabBarView(expand=True, controls=[
-                    ft.Container(content=naver_tab, padding=10),
-                    ft.Container(content=ig_tab, padding=10),
-                    ft.Container(content=x_tab, padding=10),
-                    ft.Container(content=shorts_tab, padding=10),
-                ]),
+                ft.TabBar(tabs=[ft.Tab(label=label) for label, _ in tabs]),
+                ft.TabBarView(expand=True, controls=[ft.Container(content=tab, padding=10) for _, tab in tabs]),
             ],
         ),
     )

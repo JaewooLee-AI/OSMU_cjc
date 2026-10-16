@@ -1011,6 +1011,25 @@ def _proofread_sns(instagram: dict, x_result: dict, shorts: dict, brand_kit: dic
     return applied
 
 
+# ⚙️ 설정 → 📣 생성 채널에서 켜고 끌 수 있는 SNS 채널. 네이버 블로그 본문과 발행 태그는 항상
+# 만듭니다 — SNS 글은 그 본문을 원문으로 삼아 씁니다.
+SNS_CHANNELS = {
+    "instagram": "📸 인스타그램",
+    "x": "𝕏 X 스레드",
+    "shorts": "🎬 쇼츠",
+}
+
+
+def enabled_channels(brand_kit: dict) -> List[str]:
+    """SNS channels to generate. A channel switched off costs nothing — no
+    writer call and no audit call — which matters for a channel the company
+    doesn't post to: each one is two LLM requests on every generation."""
+    stored = brand_kit.get("enabled_channels")
+    if stored is None:
+        return list(SNS_CHANNELS)
+    return [key for key in SNS_CHANNELS if key in stored]
+
+
 def _sns_fact_coverage(instagram: dict, x_result: dict, notice_fields: dict, product_fields: dict) -> Dict:
     """Which confirmed notice/product values each SNS post left out — the
     same measurement the blog body gets (factsheet.coverage). Report only: a
@@ -1048,42 +1067,42 @@ def _secondary_channels(
     was revised goes through exactly the same stages as the first run.
     """
     facts = _sns_facts(final_content, notice_fields, product_fields)
+    enabled = set(enabled_channels(brand_kit))
 
-    # The four writers are independent of each other, and each is 1~2
-    # sequential LLM round trips — run them concurrently so the slowest ones,
-    # not the sum of all four, set the wait. _safe keeps each one best-effort.
-    # Capped at SNS_CONCURRENCY rather than all four at once — see there.
+    # The writers are independent of each other, and each is 1~2 sequential
+    # LLM round trips — run them concurrently so the slowest ones, not the
+    # sum of all of them, set the wait. _safe keeps each one best-effort.
+    # Capped at SNS_CONCURRENCY rather than all at once — see there. A channel
+    # switched off in ⚙️ 설정 is never submitted (no writer, no audit).
+    empty = {
+        "instagram": {"caption": "", "hashtags": []},
+        "x": {"tweets": [], "hashtags": []},
+        "shorts": {"title": "", "hook": "", "scenes": [], "hashtags": []},
+    }
+    jobs = {
+        "instagram": ("인스타그램 캡션 생성 중…", lambda: _guarded_instagram(
+            seed_note, caption_values, brand_kit, vendor, notice_fields, product_fields, facts
+        )),
+        "x": ("X 스레드 생성 중…", lambda: _guarded_x(
+            seed_note, caption_values, brand_kit, vendor, notice_fields, product_fields, facts
+        )),
+        "shorts": ("쇼츠 구성안 생성 중…", lambda: _guarded_shorts(
+            seed_note, caption_values, brand_kit, vendor, notice_fields, product_fields, facts
+        )),
+    }
     with ThreadPoolExecutor(max_workers=SNS_CONCURRENCY) as pool:
-        ig_future = pool.submit(
-            _safe, progress, "인스타그램 캡션 생성 중…",
-            lambda: _guarded_instagram(
-                seed_note, caption_values, brand_kit, vendor, notice_fields, product_fields, facts
-            ),
-            {"caption": "", "hashtags": []},
-        )
-        x_future = pool.submit(
-            _safe, progress, "X 스레드 생성 중…",
-            lambda: _guarded_x(
-                seed_note, caption_values, brand_kit, vendor, notice_fields, product_fields, facts
-            ),
-            {"tweets": [], "hashtags": []},
-        )
-        shorts_future = pool.submit(
-            _safe, progress, "쇼츠 구성안 생성 중…",
-            lambda: _guarded_shorts(
-                seed_note, caption_values, brand_kit, vendor, notice_fields, product_fields, facts
-            ),
-            {"title": "", "hook": "", "scenes": [], "hashtags": []},
-        )
+        futures = {
+            key: pool.submit(_safe, progress, message, fn, empty[key])
+            for key, (message, fn) in jobs.items() if key in enabled
+        }
         tags_future = pool.submit(
             _safe, progress, "네이버 발행 태그 생성 중…",
             lambda: write_naver_hashtags(final_title, final_content, list(target_keywords or []), vendor),
             [],
         )
-        instagram = ig_future.result()
-        x_result = x_future.result()
-        shorts = shorts_future.result()
+        results = {key: (futures[key].result() if key in futures else dict(empty[key])) for key in empty}
         naver_hashtags = tags_future.result()
+    instagram, x_result, shorts = results["instagram"], results["x"], results["shorts"]
 
     _report(progress, "SNS 맞춤법·오탈자 교정 중…")
     sns_proofread = _proofread_sns(instagram, x_result, shorts, brand_kit, vendor)
@@ -1101,24 +1120,30 @@ def _secondary_channels(
     shorts, shorts_issues = validate_shorts(shorts)
     naver_hashtags, tag_issues = validate_naver_tags(naver_hashtags, list(target_keywords or []))
 
-    fields = {
-        "instagram_caption": instagram["caption"],
-        "instagram_hashtags": instagram["hashtags"],
-        "x_content": x_result["tweets"],
-        "x_hashtags": x_result["hashtags"],
-        "naver_hashtags": naver_hashtags,
-        "shorts_script": shorts,
+    # 꺼진 채널은 덮어쓰지 않습니다 — 예전에 만든 내용이 있으면 그대로 남습니다. 리포트에서도
+    # 빼서, 만들지 않은 채널을 '비어 있음'이나 '입력값 누락'으로 잘못 알리지 않습니다.
+    channel_fields = {
+        "instagram": {"instagram_caption": instagram["caption"], "instagram_hashtags": instagram["hashtags"]},
+        "x": {"x_content": x_result["tweets"], "x_hashtags": x_result["hashtags"]},
+        "shorts": {"shorts_script": shorts},
     }
+    fields = {"naver_hashtags": naver_hashtags}
+    for key in enabled:
+        fields.update(channel_fields[key])
+    checks = {"x": x_issues, "instagram": ig_issues, "shorts": shorts_issues}
+    compliance = {
+        "instagram": instagram.get("compliance") or {"checked": False},
+        "x": x_result.get("compliance") or {"checked": False},
+        "shorts": shorts_compliance,
+    }
+    fact_gaps = _sns_fact_coverage(instagram, x_result, notice_fields, product_fields)
     report = {
-        "sns_checks": {"x": x_issues, "instagram": ig_issues, "shorts": shorts_issues, "naver_tags": tag_issues},
+        "sns_checks": {**{k: v for k, v in checks.items() if k in enabled}, "naver_tags": tag_issues},
         # 형식 검증과는 별개입니다 — 이건 컴플라이언스 위반이 실제로 남아 있는지입니다.
-        "sns_compliance": {
-            "instagram": instagram.get("compliance") or {"checked": False},
-            "x": x_result.get("compliance") or {"checked": False},
-            "shorts": shorts_compliance,
-        },
+        "sns_compliance": {k: v for k, v in compliance.items() if k in enabled},
         "sns_proofread": sns_proofread,
-        "sns_fact_gaps": _sns_fact_coverage(instagram, x_result, notice_fields, product_fields),
+        "sns_fact_gaps": {k: v for k, v in fact_gaps.items() if k in enabled},
+        "sns_channels": sorted(enabled),
         "sns_stale": False,
     }
     return fields, report
@@ -1126,7 +1151,7 @@ def _secondary_channels(
 
 # Report entries that describe the SNS channels rather than the blog body —
 # carried over when only the body is revised (see revise_content).
-SNS_REPORT_KEYS = ("sns_checks", "sns_compliance", "sns_proofread", "sns_fact_gaps")
+SNS_REPORT_KEYS = ("sns_checks", "sns_compliance", "sns_proofread", "sns_fact_gaps", "sns_channels")
 
 
 def regenerate_sns(campaign_id: str, progress: Progress = None) -> Dict:

@@ -95,6 +95,8 @@ create table if not exists brand_kit (
     non_target_keywords   text not null default '[]',
     -- Fallback for campaigns.content_mode — see ai_workers/content_mode.py.
     default_content_mode      text not null default 'balanced',
+    -- 함께 생성할 SNS 채널(⚙️ 설정 → 📣 생성 채널). 끈 채널은 생성 호출 자체를 하지 않습니다.
+    enabled_channels          text not null default '["instagram", "x", "shorts"]',
     blacklist_map             text not null default '{}',
     default_generation_vendor text,
     vision_vendor             text,
@@ -322,6 +324,7 @@ _ADDED_COLUMNS = {
         "keyword_weights": "text not null default '{}'",
         "non_target_keywords": "text not null default '[]'",
         "default_content_mode": "text not null default 'balanced'",
+        "enabled_channels": """text not null default '["instagram", "x", "shorts"]'""",
     },
 }
 
