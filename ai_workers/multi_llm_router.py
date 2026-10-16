@@ -12,6 +12,7 @@ changes for this build:
 """
 from __future__ import annotations
 
+import re
 from typing import Optional, Tuple
 
 from core import repo
@@ -152,6 +153,37 @@ _TRUNCATION_RETRY_FACTOR = 2
 # on top so the caller's ceiling still bounds the *visible* text.
 _REASONING_HEADROOM = 8192
 
+# Claude 5세대(Sonnet 5·5.5, Opus 5·5.5, Haiku 5.5, Fable, Mythos)는 `thinking`을 빼고 보내면
+# 생각을 켠 채(adaptive) 답하고, Fable·Opus 5.5는 아예 끌 수 없습니다. 생각에 쓴 토큰도
+# max_tokens에서 빠지므로 위와 같은 여유분이 없으면 글이 한도에 걸립니다 — 2026-10-16 실측:
+# Fable 5.1은 한 편 생성 중 18회 호출 중 11회가 한도에 걸려 인스타·X가 비었고, Sonnet 5.5
+# 사진 설명은 300토큰을 전부 생각에 써서 0개였습니다. 글쓰기에 깊은 추론은 필요 없어
+# effort는 medium으로 낮춥니다(시간·비용도 같이 줄어듭니다). 4세대 이하는 그대로 둡니다 —
+# 기본값이 생각 꺼짐이고, Haiku 4.5 등은 effort를 보내면 오류가 납니다.
+_ANTHROPIC_THINKING_MIN_GENERATION = 5
+_ANTHROPIC_EFFORT = "medium"
+
+
+def anthropic_request_options(model_name: str, max_tokens: int) -> dict:
+    """`max_tokens` (and `output_config`) for a Claude request — with room for
+    thinking on the models that think by default, unchanged on older ones."""
+    match = re.match(r"claude-[a-z]+-(\d+)", (model_name or "").lower())
+    if match and int(match.group(1)) >= _ANTHROPIC_THINKING_MIN_GENERATION:
+        return {"max_tokens": max_tokens + _REASONING_HEADROOM, "output_config": {"effort": _ANTHROPIC_EFFORT}}
+    return {"max_tokens": max_tokens}
+
+
+def raise_if_refused(res) -> None:
+    """Claude's safety classifiers can stop a reply part-way (stop_reason
+    'refusal'). The text up to that point looks like a finished answer, so it
+    is raised instead of returned — a cut-off draft must never be saved."""
+    if getattr(res, "stop_reason", None) == "refusal":
+        category = getattr(getattr(res, "stop_details", None), "category", None)
+        raise RuntimeError(
+            f"Claude가 안전 정책으로 응답을 중단했습니다({category or '사유 미상'}). "
+            "중단된 글은 저장하지 않았습니다. 메모 표현을 바꿔 다시 시도해 주세요."
+        )
+
 # Transient-error retries for Gemini. The OpenAI and Anthropic SDKs already
 # retry 429/5xx (and Anthropic's 529 overloaded) twice by default; google-genai
 # retries *nothing* unless retry_options is set. A "503 UNAVAILABLE — high
@@ -215,7 +247,11 @@ def _call_anthropic(model_name, api_key, prompt, system, max_tokens):
     from anthropic import Anthropic
 
     client = Anthropic(api_key=api_key)
-    kwargs = {"model": model_name, "max_tokens": max_tokens, "messages": [{"role": "user", "content": prompt}]}
+    kwargs = {
+        "model": model_name,
+        "messages": [{"role": "user", "content": prompt}],
+        **anthropic_request_options(model_name, max_tokens),
+    }
     if system:
         # The same system prompt (brand kit + audit rules) goes out several
         # times per generation — the compliance audit alone runs for the body,
@@ -224,6 +260,7 @@ def _call_anthropic(model_name, api_key, prompt, system, max_tokens):
         # length are simply sent uncached.
         kwargs["system"] = [{"type": "text", "text": system, "cache_control": {"type": "ephemeral"}}]
     res = client.messages.create(**kwargs)
+    raise_if_refused(res)
     text = "".join(block.text for block in res.content if getattr(block, "type", "") == "text")
     usage_in = usage_out = 0
     usage = getattr(res, "usage", None)

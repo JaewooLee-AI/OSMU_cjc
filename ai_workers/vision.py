@@ -49,9 +49,11 @@ from PIL import Image
 
 from ai_workers.multi_llm_router import (
     GOOGLE_NO_ZERO_THINKING,
+    anthropic_request_options,
     get_vision_vendor,
     google_client,
     load_vendor_config,
+    raise_if_refused,
 )
 from core import repo, storage
 
@@ -291,10 +293,14 @@ def _call_anthropic(model: str, api_key: str, images: List[bytes], max_tokens: i
         )
     content.append({"type": "text", "text": _numbered_prompt(len(images))})
 
+    # 생각이 켜지는 Claude는 캡션 한도(사진당 100토큰 안팎)를 생각에 다 써서 설명이 비었습니다 —
+    # 글쓰기와 같은 여유분을 얹습니다 (multi_llm_router.anthropic_request_options).
     res = client.messages.create(
-        model=model, max_tokens=max_tokens, messages=[{"role": "user", "content": content}]
+        model=model, messages=[{"role": "user", "content": content}],
+        **anthropic_request_options(model, max_tokens),
     )
-    text = "".join(block.text for block in res.content if hasattr(block, "text"))
+    raise_if_refused(res)
+    text = "".join(block.text for block in res.content if getattr(block, "type", "") == "text")
     usage = getattr(res, "usage", None)
     return (
         text,
@@ -411,8 +417,13 @@ def describe_images(
         parsed, clean = _parse_captions(raw_text, len(chunk))
         # Landing within a few tokens of the ceiling means the model was cut
         # off mid-sentence, even when the salvage path recovered enough
-        # complete items to look successful.
-        truncated = used_out >= max_tokens - 8
+        # complete items to look successful. Claude counts its thinking in
+        # output_tokens, so it is measured against the ceiling actually sent
+        # (with the thinking allowance), not the caption budget alone.
+        ceiling = (
+            anthropic_request_options(model_name, max_tokens)["max_tokens"] if vendor == "anthropic" else max_tokens
+        )
+        truncated = used_out >= ceiling - 8
 
         repo.log_usage(
             kind="vision",
