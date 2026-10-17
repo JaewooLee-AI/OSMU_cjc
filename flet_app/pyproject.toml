@@ -30,5 +30,10 @@ company = "cjc"
 # (1.0.4는 그래서 철회됐고 1.0.4+1은 jni ^1.1.0을 요구). 10/15부터 빌드가 실패했다.
 # `JniVersionCheck(1, 0)`인 마지막 버전 1.0.3으로 고정한다. flet을 jni 1.1을
 # 쓰는 버전으로 올릴 때 이 고정도 같이 풀면 된다.
+#
+# 같은 이유로 shared_preferences_android도 고정한다. 2.5.0(2026-10-17 공개)부터 jni ^1.1.0으로
+# 만든 코드(messages.g.jni.dart)가 들어가 같은 "Constant evaluation error"로 빌드가 깨졌다.
+# jni를 쓰지 않는 마지막 버전이 2.4.28이다. jni 1.1을 쓰는 flet으로 올릴 때 같이 푼다.
 [tool.flet.flutter.pubspec.dependency_overrides]
 jni_flutter = "1.0.3"
+shared_preferences_android = "2.4.28"

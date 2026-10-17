@@ -102,3 +102,5 @@ DB 스키마를 바꿀 때는 `core/db.py`의 기존 방식(앱 시작 시 한 �
 - flet은 `1.0.2`로 고정합니다. 올릴 때는 flet·flet-cli·flet-desktop이 모두 같은 버전으로 PyPI에 올라와 있는지 확인합니다.
 - **`flet_app/pyproject.toml`의 `jni_flutter = "1.0.3"` 고정을 유지합니다.** 1.0.4 이상은 flet 1.0.2 템플릿(jni 1.0.0)과
   맞지 않아 Dart 컴파일이 "Constant evaluation error"로 깨집니다. flet을 jni 1.1을 쓰는 버전으로 올릴 때만 이 고정을 같이 풉니다.
+  같은 이유로 `shared_preferences_android = "2.4.28"`도 고정합니다(2.5.0부터 jni ^1.1). 빌드가 다시 이 오류로 깨지면
+  로그에서 오류가 난 패키지를 찾아, pub.dev에서 jni 1.1을 요구하기 직전 버전으로 같은 자리에 고정합니다.
