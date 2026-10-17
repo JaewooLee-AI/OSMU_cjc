@@ -1,31 +1,20 @@
-"""씨제이씨협동조합 / 키노피스 Brand Kit — seeded from ../cjc_blog_v2/.
+"""씨제이씨협동조합 / 키노피스 브랜드 킷 시드 — 첫 실행 때 한 번만 DB에 들어가는 기본값.
 
-Everything here is lifted from the cooperative's own documents rather than
-invented, so the generated drafts cite facts the cooperative can actually
-stand behind:
+값은 지어낸 것이 아니라 조합 자료에서 옮긴 것입니다 (생성되는 초안이 조합이 실제로
+책임질 수 있는 사실만 인용하도록):
 
-- ../cjc_blog_v2/config.json
-  (persona_guide.system_persona, few_shot_samples, fact_database.company_facts,
-  compliance.whitelist_seo/blacklist_map, naver_settings.naver_blog_id)
-- ../cjc_blog_v2/AI 블로그 자동화 시스템 기획.md
-  (2014 founding, certifications, ATUM specs, KOTITI thresholds, 7~10-day
-  delivery, ESG process, market size)
-- https://atumkorea.com/ (company/ · atum/ · kinopiece/ · certificate/ —
-  설립 취지, ATUM 측정 방식·스펙, 키노피스 품목, 인증·특허 목록,
-  주소·대표·연락처)
-- ../cjc_blog_v2/README.md, AGENTS.md (domain context, compliance rules)
+- 조합 블로그 자동화 기획 자료(설정 파일의 페르소나·우수 포스팅·팩트·컴플라이언스 사전,
+  2014년 설립·인증·ATUM 스펙·KOTITI 수치·7~10일 배송·ESG 공정)
+- https://atumkorea.com/ (company/ · atum/ · kinopiece/ · certificate/ — 설립 취지,
+  ATUM 측정 방식·스펙, 키노피스 품목, 인증·특허 목록, 주소·대표·연락처)
 
-One deliberate alignment with OSMU_admin's Brand Kit: the compliance
-guardrail there was written for 의료법/표시광고법, and CJC sells custom wigs
-and scalp-care-adjacent services — so its real legal exposure is **medical
-efficacy overstatement** (탈모 완치·치료 등) under 의료법 제56조 and
-표시·광고의 공정화에 관한 법률. The blacklist and the auditor prompt
-(ai_workers/guardrail.py) are built around that instead of the greenwashing
-criteria used for the previous (upcycling) tenant.
+컴플라이언스: 조합은 맞춤가발·두피 케어 인접 서비스를 하므로 실제 법적 위험은
+의료 효능 과장(탈모 완치·치료 등)입니다 — 의료법 제56조와 표시·광고의 공정화에 관한
+법률. 금기어 사전(BLACKLIST_MAP)과 감사 프롬프트(ai_workers/guardrail.py)가 이 기준입니다.
 
-`seed_if_empty()` runs once on first launch; after that the Brand Kit page is
-the source of truth and this file is never re-applied, so admin edits are
-never clobbered.
+`seed_if_empty()`는 DB가 비어 있을 때 첫 실행에서 한 번만 실행됩니다. 그 뒤로는
+🧵 브랜드 킷 화면이 원본이며 이 파일은 다시 적용되지 않으므로, 관리자가 고친 내용을
+덮어쓰지 않습니다. 이미 저장된 문구를 한 번만 고쳐야 할 때는 SEED_FIXES를 씁니다.
 """
 from __future__ import annotations
 

@@ -98,9 +98,7 @@ def status_chip(status: str, scale: float = DEFAULT_FONT_SCALE) -> ft.Container:
 
 
 def palette_row(scale: float = DEFAULT_FONT_SCALE) -> ft.Control:
-    # 이 라벨은 core/theme.py의 palette_html()과 다릅니다 — 그쪽은 이전
-    # 테넌트(더스티치/한복)의 색상명(자주·쪽빛·금박 등)이 리브랜딩 때 갱신되지
-    # 않은 채 남아 있습니다. README.md가 설명하는 실제 CJC 팔레트 이름을 씁니다.
+    # README.md가 설명하는 CJC 팔레트 이름입니다.
     names = {
         "primary": "네이비",
         "secondary": "틸",

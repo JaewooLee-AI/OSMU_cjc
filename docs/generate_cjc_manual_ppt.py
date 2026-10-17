@@ -745,7 +745,6 @@ add_text(s, Inches(0.9), Inches(2.4), Inches(11), Inches(0.5), "더 알아보기
 add_text(s, Inches(0.85), Inches(2.85), Inches(11.5), Inches(1.1), "참고 문서", size=32, color=WHITE, bold=True)
 add_bullets(s, Inches(0.9), Inches(4.0), Inches(11.2), Inches(2.4), [
     (0, "README.md — 아키텍처와 설계 이유", False),
-    (0, "CLAUDE.md — 다른 회사용으로 바꿀 때의 절차", False),
     (0, "HANDOFF.md — 구축 보고 (앱 📋 구축 보고서 페이지에서도 열람)", False),
     (0, "문의: 씨제이씨협동조합 02-6396-3388 · cjc@cjccoop.com", False),
 ], size=15, color=RGBColor(0xF5, 0xED, 0xD7), space_after=14, muted=RGBColor(0xD8, 0xC6, 0xCE))

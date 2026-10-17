@@ -13,7 +13,7 @@ facts, persona), so the judgment runs there: candidates plus brand kit go to
 the configured model, which drops the irrelevant ones and files the rest by
 search intent. The intent groups are fixed and deliberately generic — they
 describe why someone typed the query, not what the company sells, so they
-hold for the next tenant of this app without a code change.
+hold for every brand kit without a code change.
 
 Nothing here writes to the brand kit. `propose()` returns a proposal; the
 settings screen renders it as a diff and the human applies it.
