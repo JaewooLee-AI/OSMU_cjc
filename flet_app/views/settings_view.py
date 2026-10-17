@@ -28,6 +28,7 @@ from ai_workers.multi_llm_router import VENDORS, test_connection, vision_capable
 from core import repo
 from core.crypto_utils import decrypt_api_key, encrypt_api_key
 
+from flet_app.kit_picker import kit_dropdown
 from flet_app.state import FONT_SCALE_STATE_KEY, AppState
 from flet_app.theme import BRAND_COLORS, MAX_FONT_SCALE, MIN_FONT_SCALE, fs, stat_card
 
@@ -173,7 +174,7 @@ def _vendor_card(page: ft.Page, vendor_key: str, spec: dict, default_status: ft.
     delete_button = ft.IconButton(icon=ft.Icons.DELETE_OUTLINE, visible=bool(saved))
 
     def _refresh_default_status() -> None:
-        current = repo.get_brand_kit().get("default_generation_vendor")
+        current = repo.get_app_settings().get("default_generation_vendor")
         setting = repo.get_llm_setting(current) if current else None
         if current and setting and setting.get("is_active"):
             cur_spec = VENDORS[current]
@@ -222,7 +223,7 @@ def _vendor_card(page: ft.Page, vendor_key: str, spec: dict, default_status: ft.
                 # 연결이 확인된 벤더를 그 자리에서 바로 기본 생성 모델로 지정합니다 —
                 # 등록과 "기본으로 지정"이 별개 단계이면 소상공인 고객이 두 번째 단계를
                 # 빠뜨리고 글쓰기 시점에야 원인을 알기 어려운 오류를 봅니다.
-                repo.save_brand_kit(default_generation_vendor=vendor_key)
+                repo.save_app_settings(default_generation_vendor=vendor_key)
 
                 saved = repo.get_llm_setting(vendor_key)
                 badge.value = _saved_badge(saved["encrypted_api_key"], saved.get("updated_at"))
@@ -247,12 +248,12 @@ def _vendor_card(page: ft.Page, vendor_key: str, spec: dict, default_status: ft.
 
     def on_delete(e: ft.Event) -> None:
         repo.delete_llm_setting(vendor_key)
-        if repo.get_brand_kit().get("default_generation_vendor") == vendor_key:
+        if repo.get_app_settings().get("default_generation_vendor") == vendor_key:
             remaining = [
                 k for k in VENDORS
                 if k != vendor_key and (repo.get_llm_setting(k) or {}).get("is_active")
             ]
-            repo.save_brand_kit(default_generation_vendor=remaining[0] if remaining else None)
+            repo.save_app_settings(default_generation_vendor=remaining[0] if remaining else None)
 
         nonlocal saved
         saved = None
@@ -295,7 +296,7 @@ def _vendor_card(page: ft.Page, vendor_key: str, spec: dict, default_status: ft.
 def _build_llm_tab(page: ft.Page, scale: float) -> ft.Control:
     default_status = ft.Text("", size=fs(13, scale))
 
-    current = repo.get_brand_kit().get("default_generation_vendor")
+    current = repo.get_app_settings().get("default_generation_vendor")
     setting = repo.get_llm_setting(current) if current else None
     if current and setting and setting.get("is_active"):
         cur_spec = VENDORS[current]
@@ -602,11 +603,13 @@ def _build_searchad_section(page: ft.Page, scale: float, rebuild) -> ft.Control:
     )
 
 
-def _build_sweep_wizard(page: ft.Page, scale: float, rebuild) -> ft.Control:
+def _build_sweep_wizard(page: ft.Page, scale: float, rebuild, kit_id: int) -> ft.Control:
+    # 진행 상태도 킷마다 따로 — 한 킷의 스윕을 하다 다른 킷으로 바꿔도 서로 덮지 않습니다.
+    sweep_key = repo.kit_state_key("sweep", kit_id)
     naver_saved = repo.get_naver_api_settings()
     ad_saved = repo.get_searchad_settings()
     keys_ok = bool(naver_saved and ad_saved)
-    pool = repo.get_brand_kit().get("seo_keywords") or []
+    pool = repo.get_brand_kit(kit_id).get("seo_keywords") or []
 
     controls: list[ft.Control] = []
 
@@ -681,7 +684,7 @@ def _build_sweep_wizard(page: ft.Page, scale: float, rebuild) -> ft.Control:
 
         def _work() -> None:
             try:
-                suggested = keyword_curator.suggest_seeds()
+                suggested = keyword_curator.suggest_seeds(kit_id=kit_id)
             except Exception as exc:  # noqa: BLE001
                 seed_error.value = f"추천 실패: {exc}"
                 seed_error.color = "#B3261E"
@@ -706,9 +709,9 @@ def _build_sweep_wizard(page: ft.Page, scale: float, rebuild) -> ft.Control:
     controls.append(ft.Row([seed_field, suggest_button]))
     controls.append(seed_error)
 
-    sweep = repo.get_app_state("sweep") or {}
+    sweep = repo.get_app_state(sweep_key) or {}
     stage = sweep.get("stage", 0)
-    age = repo.app_state_age_days("sweep")
+    age = repo.app_state_age_days(sweep_key)
     if stage and age is not None and age > 0.02:
         controls.append(ft.Text(
             f"↩️ 진행 중이던 작업을 이어서 표시합니다 ({age * 24:.0f}시간 전 중단).",
@@ -740,7 +743,7 @@ def _build_sweep_wizard(page: ft.Page, scale: float, rebuild) -> ft.Control:
         adv_status.update()
 
     def on_reset_sweep(e: ft.Event) -> None:
-        repo.clear_app_state("sweep")
+        repo.clear_app_state(sweep_key)
         rebuild()
 
     advanced_box = ft.Container(
@@ -805,7 +808,7 @@ def _build_sweep_wizard(page: ft.Page, scale: float, rebuild) -> ft.Control:
                 find_status.update()
                 find_button.update()
                 return
-            repo.set_app_state("sweep", {"stage": 1, "candidates": found})
+            repo.set_app_state(sweep_key, {"stage": 1, "candidates": found})
             rebuild()
 
         page.run_thread(_work)
@@ -853,7 +856,7 @@ def _build_sweep_wizard(page: ft.Page, scale: float, rebuild) -> ft.Control:
                         find_status.update()
                         score_button.update()
                         return
-                    repo.set_app_state("sweep", {"stage": 2, "candidates": candidates, "scored": scored})
+                    repo.set_app_state(sweep_key, {"stage": 2, "candidates": candidates, "scored": scored})
                     rebuild()
 
                 page.run_thread(_work)
@@ -884,7 +887,7 @@ def _build_sweep_wizard(page: ft.Page, scale: float, rebuild) -> ft.Control:
 
             def _work() -> None:
                 try:
-                    result = keyword_curator.propose(scored, current=pool)
+                    result = keyword_curator.propose(scored, current=pool, kit_id=kit_id)
                 except Exception as exc:  # noqa: BLE001
                     propose_status.value = f"❌ {exc}"
                     propose_status.color = "#B3261E"
@@ -892,7 +895,7 @@ def _build_sweep_wizard(page: ft.Page, scale: float, rebuild) -> ft.Control:
                     propose_status.update()
                     propose_button.update()
                     return
-                repo.set_app_state("sweep", {**sweep, "stage": 3, "proposal": result})
+                repo.set_app_state(sweep_key, {**sweep, "stage": 3, "proposal": result})
                 rebuild()
 
             page.run_thread(_work)
@@ -986,8 +989,8 @@ def _build_sweep_wizard(page: ft.Page, scale: float, rebuild) -> ft.Control:
 
                 def _work() -> None:
                     try:
-                        applied = keyword_curator.apply_and_measure(final, proposal)
-                        repo.clear_app_state("sweep")
+                        applied = keyword_curator.apply_and_measure(final, proposal, kit_id)
+                        repo.clear_app_state(sweep_key)
                         apply_status.value = (
                             f"✅ SEO 키워드 {applied['pool']}개로 갱신하고 측정까지 마쳤습니다 "
                             f"(호출 {applied['calls']}회)."
@@ -1005,7 +1008,7 @@ def _build_sweep_wizard(page: ft.Page, scale: float, rebuild) -> ft.Control:
                 page.run_thread(_work)
 
             def on_discard(e: ft.Event) -> None:
-                repo.clear_app_state("sweep")
+                repo.clear_app_state(sweep_key)
                 rebuild()
 
             controls.append(ft.Text(
@@ -1029,7 +1032,7 @@ def _build_sweep_wizard(page: ft.Page, scale: float, rebuild) -> ft.Control:
         [
             ft.Text("🔑 SEO 키워드 새로 고르기 (추천 → 1~4단계)", weight=ft.FontWeight.BOLD, size=fs(16, scale)),
             ft.Text(
-                "브랜드 킷의 SEO 키워드 전체를 새로 정하는 곳입니다. 4단계 [✅ 적용]을 눌러야 "
+                "위에서 고른 킷의 SEO 키워드 전체를 새로 정하는 곳입니다. 4단계 [✅ 적용]을 눌러야 "
                 "바뀌고, 적용하면서 새 키워드의 수치도 함께 측정하므로 따로 할 일은 없습니다. "
                 "처음 한 번, 그리고 사업 방향이 바뀌거나 몇 달에 한 번 새 검색어를 반영하고 싶을 때 돌리세요.",
                 size=fs(12, scale), color=BRAND_COLORS["text_muted"],
@@ -1050,12 +1053,15 @@ def _build_sweep_wizard(page: ft.Page, scale: float, rebuild) -> ft.Control:
         ],
         spacing=8,
     )
-    add = _build_category_adder(page, scale, rebuild, keys_ok, pool)
+    add = _build_category_adder(page, scale, rebuild, keys_ok, pool, kit_id)
     return ft.Column([pick, ft.Divider(), add, ft.Divider(), keep], spacing=12)
 
 
-def _build_category_adder(page: ft.Page, scale: float, rebuild, keys_ok: bool, pool: list[str]) -> ft.Control:
-    state = repo.get_app_state("category_sweep") or {}
+def _build_category_adder(
+    page: ft.Page, scale: float, rebuild, keys_ok: bool, pool: list[str], kit_id: int
+) -> ft.Control:
+    cat_key = repo.kit_state_key("category_sweep", kit_id)
+    state = repo.get_app_state(cat_key) or {}
     stage = state.get("stage", 0)
     status = ft.Text("", size=fs(12, scale), color="#B3261E")
 
@@ -1090,11 +1096,11 @@ def _build_category_adder(page: ft.Page, scale: float, rebuild, keys_ok: bool, p
 
         def _work() -> None:
             try:
-                found = keyword_curator.find_category_candidates(category, current=pool)
+                found = keyword_curator.find_category_candidates(category, current=pool, kit_id=kit_id)
             except Exception as exc:  # noqa: BLE001
                 _fail(find_button, exc)
                 return
-            repo.set_app_state("category_sweep", {"stage": 1, **found})
+            repo.set_app_state(cat_key, {"stage": 1, **found})
             rebuild()
 
         page.run_thread(_work)
@@ -1128,7 +1134,7 @@ def _build_category_adder(page: ft.Page, scale: float, rebuild, keys_ok: bool, p
         controls.append(ft.Text(state["done"], size=fs(12, scale), color="#1B6E3C"))
 
     def on_discard(e: ft.Event) -> None:
-        repo.clear_app_state("category_sweep")
+        repo.clear_app_state(cat_key)
         rebuild()
 
     relevant = state.get("relevant")
@@ -1162,7 +1168,7 @@ def _build_category_adder(page: ft.Page, scale: float, rebuild, keys_ok: bool, p
                     except Exception as exc:  # noqa: BLE001
                         _fail(score_button, exc)
                         return
-                    repo.set_app_state("category_sweep", {**state, "stage": 2, "proposal": proposal})
+                    repo.set_app_state(cat_key, {**state, "stage": 2, "proposal": proposal})
                     rebuild()
 
                 page.run_thread(_work)
@@ -1228,11 +1234,11 @@ def _build_category_adder(page: ft.Page, scale: float, rebuild, keys_ok: bool, p
 
             def _work() -> None:
                 try:
-                    applied = keyword_curator.apply_and_measure(pool + added, proposal)
+                    applied = keyword_curator.apply_and_measure(pool + added, proposal, kit_id)
                 except Exception as exc:  # noqa: BLE001
                     _fail(apply_button, exc)
                     return
-                repo.set_app_state("category_sweep", {"done": (
+                repo.set_app_state(cat_key, {"done": (
                     f"✅ '{state.get('category')}' 분야 키워드 {len(added)}개({', '.join(added)})를 더했습니다 — "
                     f"SEO 키워드 총 {applied['pool']}개 (호출 {applied['calls']}회). 🧵 브랜드 킷에서 확인할 수 있습니다."
                 )})
@@ -1246,8 +1252,8 @@ def _build_category_adder(page: ft.Page, scale: float, rebuild, keys_ok: bool, p
     return ft.Column(controls, spacing=8)
 
 
-def _build_keyword_diagnostic_section(page: ft.Page, scale: float) -> ft.Control:
-    pool = repo.get_brand_kit().get("seo_keywords") or []
+def _build_keyword_diagnostic_section(page: ft.Page, scale: float, kit_id: int) -> ft.Control:
+    pool = repo.get_brand_kit(kit_id).get("seo_keywords") or []
     naver_saved = repo.get_naver_api_settings()
     result_box = ft.Container()
     status = ft.Text("", size=fs(12, scale), color="#B3261E")
@@ -1298,7 +1304,7 @@ def _build_keyword_diagnostic_section(page: ft.Page, scale: float) -> ft.Control
         )
     ]
     if not pool:
-        body.append(ft.Text("브랜드 킷에 SEO 키워드가 없습니다.", size=fs(12, scale)))
+        body.append(ft.Text("이 킷에 SEO 키워드가 없습니다.", size=fs(12, scale)))
     elif not naver_saved:
         body.append(ft.Text("먼저 위에서 키를 등록하세요.", size=fs(12, scale)))
     else:
@@ -1309,14 +1315,48 @@ def _build_keyword_diagnostic_section(page: ft.Page, scale: float) -> ft.Control
     return ft.Column(body, spacing=8)
 
 
+# 설정 화면에서 마지막으로 고른 키워드 작업 대상 킷. 화면을 다시 열어도 같은 킷에서 이어가게 합니다.
+_KEYWORD_KIT_STATE_KEY = "settings_keyword_kit"
+
+
+def _initial_keyword_kit_id() -> int | None:
+    saved = (repo.get_app_state(_KEYWORD_KIT_STATE_KEY) or {}).get("kit_id")
+    active = {k["id"] for k in repo.list_brand_kits()}
+    return saved if saved in active else repo.default_brand_kit_id()
+
+
 def _build_naver_tab(page: ft.Page, scale: float) -> ft.Control:
     wizard_box = ft.Container()
+    diag_box = ft.Container()
+    selected = [_initial_keyword_kit_id()]
 
     def rebuild() -> None:
-        wizard_box.content = _build_sweep_wizard(page, scale, rebuild)
+        wizard_box.content = _build_sweep_wizard(page, scale, rebuild, selected[0])
+        diag_box.content = _build_keyword_diagnostic_section(page, scale, selected[0])
         wizard_box.update()
+        diag_box.update()
 
-    wizard_box.content = _build_sweep_wizard(page, scale, rebuild)
+    def on_kit(kit_id: int) -> None:
+        selected[0] = kit_id
+        repo.set_app_state(_KEYWORD_KIT_STATE_KEY, {"kit_id": kit_id})
+        rebuild()
+
+    wizard_box.content = _build_sweep_wizard(page, scale, rebuild, selected[0])
+    diag_box.content = _build_keyword_diagnostic_section(page, scale, selected[0])
+
+    kit_section = ft.Column(
+        [
+            ft.Text("🧵 키워드 작업 대상 킷", weight=ft.FontWeight.BOLD, size=fs(16, scale)),
+            ft.Text(
+                "아래 'SEO 키워드 새로 고르기'·'사업 분야 추가'·'현재 키워드 수치 유지'·진단은 모두 "
+                "여기서 고른 킷에만 반영됩니다. 키워드 측정값(검색량·문서 수) 캐시는 킷끼리 함께 써서, "
+                "같은 키워드를 두 킷에서 써도 호출이 두 번 나가지 않습니다.",
+                size=fs(12, scale), color=BRAND_COLORS["text_muted"],
+            ),
+            kit_dropdown(selected[0], on_kit, label="대상 킷"),
+        ],
+        spacing=8,
+    )
 
     return ft.Column(
         [
@@ -1328,9 +1368,10 @@ def _build_naver_tab(page: ft.Page, scale: float) -> ft.Control:
             ft.Divider(),
             _build_searchad_section(page, scale, rebuild),
             ft.Divider(),
+            kit_section,
             wizard_box,
             ft.Divider(),
-            _build_keyword_diagnostic_section(page, scale),
+            diag_box,
         ],
         spacing=10,
         scroll=ft.ScrollMode.AUTO,
@@ -1339,18 +1380,18 @@ def _build_naver_tab(page: ft.Page, scale: float) -> ft.Control:
 
 
 def _build_vision_tab(scale: float) -> ft.Control:
-    brand_kit = repo.get_brand_kit()
+    settings = repo.get_app_settings()
 
     vision_enabled = ft.Switch(
         label="이미지 분석 사용",
-        value=brand_kit.get("vision_enabled", True),
+        value=settings.get("vision_enabled", True),
     )
 
     registered = [
         v for v in vision_capable_vendors() if (repo.get_llm_setting(v) or {}).get("is_active")
     ]
     default_label = "(기본 생성 모델과 동일)"
-    current_vv = brand_kit.get("vision_vendor")
+    current_vv = settings.get("vision_vendor")
     vendor_dropdown = ft.Dropdown(
         label="이미지 분석 벤더",
         value=current_vv if current_vv in registered else default_label,
@@ -1360,7 +1401,7 @@ def _build_vision_tab(scale: float) -> ft.Control:
     )
 
     quality_keys = list(vision.QUALITY_PRESETS.keys())
-    current_q = brand_kit.get("vision_quality") or vision.DEFAULT_QUALITY
+    current_q = settings.get("vision_quality") or vision.DEFAULT_QUALITY
     quality_group = ft.RadioGroup(
         value=current_q if current_q in quality_keys else quality_keys[0],
         content=ft.Column(
@@ -1390,7 +1431,7 @@ def _build_vision_tab(scale: float) -> ft.Control:
 
     def on_save(e: ft.Event) -> None:
         chosen = vendor_dropdown.value
-        repo.save_brand_kit(
+        repo.save_app_settings(
             vision_enabled=vision_enabled.value,
             vision_quality=quality_group.value,
             vision_vendor=None if chosen == default_label else chosen,
@@ -1519,13 +1560,13 @@ def _build_channels_tab(scale: float) -> ft.Control:
     원문으로 삼아 쓰기 때문입니다. 끈 채널은 작성·검수 호출을 아예 하지 않아, 운영하지 않는
     채널에 매 글마다 AI 비용이 나가지 않습니다. 이미 만들어 둔 내용은 지우지 않습니다.
     """
-    active = set(enabled_channels(repo.get_brand_kit()))
+    active = set(enabled_channels(repo.get_app_settings()))
     checks = {key: ft.Checkbox(label=label, value=key in active) for key, label in SNS_CHANNELS.items()}
     status = ft.Text("", size=fs(12, scale))
 
     def on_save(e: ft.Event) -> None:
         chosen = [key for key, cb in checks.items() if cb.value]
-        repo.save_brand_kit(enabled_channels=chosen)
+        repo.save_app_settings(enabled_channels=chosen)
         names = ", ".join(SNS_CHANNELS[k] for k in chosen) if chosen else "SNS 채널 없음"
         status.value = f"✅ 저장했습니다 — 네이버 블로그 + {names}. 다음 초안 생성부터 적용됩니다."
         status.color = "#1B6E3C"

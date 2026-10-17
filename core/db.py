@@ -25,19 +25,29 @@ from pathlib import Path
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
 
+def _is_packaged_app() -> bool:
+    """`flet build`으로 만든 exe(설치형·zip)로 실행 중인지.
+
+    Flet 빌드 템플릿은 실행할 때 FLET_APP_STORAGE_DATA를 넣어 주고, 소스에서
+    `python flet_app/main.py`로 띄우면 이 값이 없습니다.
+    """
+    return bool(os.environ.get("FLET_APP_STORAGE_DATA"))
+
+
 def _default_data_dir() -> Path:
     """Where data/ lives when OSMU_DATA_DIR isn't set.
 
-    A packaged desktop app's install location (e.g. Program Files) may not be
-    writable, so a fresh install needs a per-user OS data folder instead of
-    PROJECT_ROOT/data. But this repo also has a live Streamlit install whose
-    data/ already exists next to the project — for that install, switching
-    the default out from under it would make its data look like it vanished.
-    So: keep using PROJECT_ROOT/data if it's already there (existing installs
-    untouched), and only fall back to a per-user folder for a brand new one.
+    - 소스 저장소에서 실행하고 저장소 루트에 data/가 이미 있으면 그 폴더 (개발용).
+    - 그 밖에는 사용자별 폴더 (Windows `%APPDATA%\\OSMU_CJC`).
+
+    패키징된 앱은 PROJECT_ROOT/data를 절대 쓰지 않습니다. 설치형에서 PROJECT_ROOT는
+    `C:\\Program Files\\…\\app`(빌드가 앱 코드를 exe 옆 app 폴더에 둠)이라 쓰기가 막혀
+    있고, 재설치 때 설치 폴더를 통째로 비우므로 거기 둔 데이터는 지워집니다.
+    zip으로 배포하던 이전 버전도 app 폴더에 data/가 없어 사용자별 폴더를 썼으므로,
+    설치형으로 옮겨도 같은 데이터를 그대로 읽습니다.
     """
     existing = PROJECT_ROOT / "data"
-    if existing.exists():
+    if not _is_packaged_app() and existing.exists():
         return existing
 
     if sys.platform == "win32":
@@ -67,43 +77,33 @@ create table if not exists llm_settings (
     updated_at          text not null default (datetime('now'))
 );
 
--- Single-row brand configuration (persona/tone/facts/glossary/compliance).
-create table if not exists brand_kit (
+-- 회사 전체에 하나인 값. 블로그·인스타그램 계정이 하나이고, 금기어·가드레일은
+-- 의료법·표시광고법 기준이라 사업 분야(브랜드 킷)와 관계없이 회사 전체에 적용됩니다.
+create table if not exists company_profile (
+    id                  integer primary key check (id = 1),
+    brand_name          text,
+    sub_brand           text,
+    homepage            text,
+    naver_blog_id       text,
+    instagram_handle    text,
+    blacklist_map       text not null default '{}',
+    guardrail_enabled   integer not null default 1,
+    updated_at          text not null default (datetime('now'))
+);
+
+-- 앱 전역 설정(⚙️ 설정 화면). 예전에는 brand_kit 한 줄에 같이 들어 있었습니다.
+create table if not exists app_settings (
     id                        integer primary key check (id = 1),
-    brand_name                text,
-    sub_brand                 text,
-    industry                  text,
-    homepage                  text,
-    persona                   text,
-    tone_and_manner           text,
-    guardrail_enabled         integer not null default 1,
-    naver_blog_id             text,
-    instagram_handle          text,
-    core_facts                text not null default '[]',
-    few_shot_samples          text not null default '[]',
-    terminology               text not null default '{}',
-    seo_keywords              text not null default '[]',
-    -- keyword -> conversion weight. Keeps "how much traffic can we win" and
-    -- "what is that traffic worth to us" as separate inputs: the first is
-    -- measurable from Naver, the second only the brand knows. Absent keys
-    -- default to 1.0, so an empty map reproduces pure traffic ranking.
-    keyword_weights           text not null default '{}',
-    -- 본문에는 쓰되 제목은 맡기지 않을 키워드. 브랜드 어휘(키노피스, ATUM)가
-    -- 여기 들어갑니다 — 검색 수요가 없어 제목을 맡기면 노출을 버리는 셈이지만,
-    -- 글에는 계속 등장해야 하는 단어라 풀에서 뺄 수도 없습니다. 가중치로 누르지
-    -- 않는 이유는 가중치가 '이 유입의 사업적 가치'라는 다른 뜻이기 때문입니다.
-    non_target_keywords   text not null default '[]',
-    -- Fallback for campaigns.content_mode — see ai_workers/content_mode.py.
-    default_content_mode      text not null default 'balanced',
-    -- 함께 생성할 SNS 채널(⚙️ 설정 → 📣 생성 채널). 끈 채널은 생성 호출 자체를 하지 않습니다.
-    enabled_channels          text not null default '["instagram", "x", "shorts"]',
-    blacklist_map             text not null default '{}',
     default_generation_vendor text,
     vision_vendor             text,
     vision_quality            text not null default 'economy',
     vision_enabled            integer not null default 1,
+    -- 함께 생성할 SNS 채널(⚙️ 설정 → 📣 생성 채널). 끈 채널은 생성 호출 자체를 하지 않습니다.
+    enabled_channels          text not null default '["instagram", "x", "shorts"]',
     updated_at                text not null default (datetime('now'))
 );
+
+__BRAND_KIT_DDL__
 
 -- One row per piece of content, from source selection through publish.
 create table if not exists campaigns (
@@ -121,11 +121,16 @@ create table if not exists campaigns (
     status              text not null default 'awaiting_media'
         check (status in ('awaiting_media', 'queued', 'processing', 'draft',
                           'ready_to_publish', 'published', 'failed')),
-    -- 'rich' | 'balanced' | 'seo'; null = follow brand_kit.default_content_mode.
+    -- 'rich' | 'balanced' | 'seo'; null = follow the kit's default_content_mode.
     -- Deliberately not CHECK-constrained: ai_workers/content_mode.py falls
     -- back to the default for anything it doesn't recognise, and a rejected
     -- INSERT would be a worse failure than an unknown mode.
     content_mode        text,
+    -- 이 글을 쓸 때 고른 브랜드 킷과, 그때의 킷 이름. 이름을 따로 남기는 이유는
+    -- title_history와 같습니다 — 킷을 고치거나 삭제(보관)해도 어느 킷으로 쓴 글인지
+    -- 알 수 있어야 합니다. 외래 키를 두지 않는 것도 같은 이유입니다.
+    brand_kit_id        integer,
+    brand_kit_name      text,
     -- 공지·모집 글의 일시/장소/비용/신청 방법 (JSON 오브젝트, 빈 값은 저장하지
     -- 않음). 비어 있으면 일반 글입니다 — 별도 유형 플래그를 두지 않는 이유는
     -- ai_workers/factsheet.py 참고.
@@ -275,6 +280,44 @@ create table if not exists usage_log (
 );
 """
 
+# 사업 분야별 브랜드 킷. 행이 여러 개이고, 글마다 어느 킷으로 쓸지 고릅니다.
+# 삭제는 is_archived = 1(보관)로만 합니다 — 글이 킷 ID를 들고 있으므로 행을 지우면
+# 그 글이 어느 킷으로 쓰였는지 잃게 되고, 실수로 지운 킷을 되살릴 수도 없습니다.
+# 마이그레이션이 같은 정의로 새 테이블을 만들어 옮기므로 테이블 이름만 바꿔 씁니다.
+def _brand_kit_ddl(table: str) -> str:
+    return f"""
+create table if not exists {table} (
+    id                        integer primary key autoincrement,
+    name                      text not null default '기본',
+    sort_order                integer not null default 0,
+    is_archived               integer not null default 0,
+    industry                  text,
+    persona                   text,
+    tone_and_manner           text,
+    core_facts                text not null default '[]',
+    few_shot_samples          text not null default '[]',
+    terminology               text not null default '{{}}',
+    seo_keywords              text not null default '[]',
+    -- keyword -> conversion weight. Keeps "how much traffic can we win" and
+    -- "what is that traffic worth to us" as separate inputs: the first is
+    -- measurable from Naver, the second only the brand knows. Absent keys
+    -- default to 1.0, so an empty map reproduces pure traffic ranking.
+    keyword_weights           text not null default '{{}}',
+    -- 본문에는 쓰되 제목은 맡기지 않을 키워드. 브랜드 어휘(키노피스, ATUM)가
+    -- 여기 들어갑니다 — 검색 수요가 없어 제목을 맡기면 노출을 버리는 셈이지만,
+    -- 글에는 계속 등장해야 하는 단어라 풀에서 뺄 수도 없습니다. 가중치로 누르지
+    -- 않는 이유는 가중치가 '이 유입의 사업적 가치'라는 다른 뜻이기 때문입니다.
+    non_target_keywords       text not null default '[]',
+    -- Fallback for campaigns.content_mode — see ai_workers/content_mode.py.
+    default_content_mode      text not null default 'balanced',
+    created_at                text not null default (datetime('now')),
+    updated_at                text not null default (datetime('now'))
+);
+"""
+
+
+SCHEMA = SCHEMA.replace("__BRAND_KIT_DDL__", _brand_kit_ddl("brand_kit"))
+
 
 def _connect() -> sqlite3.Connection:
     DATA_DIR.mkdir(parents=True, exist_ok=True)
@@ -300,12 +343,17 @@ def init_db() -> None:
         with _connect() as conn:
             conn.executescript(SCHEMA)
             _migrate(conn)
-            conn.execute(
-                "insert or ignore into brand_kit (id) values (1)"
-            )
+            conn.execute("insert or ignore into company_profile (id) values (1)")
+            conn.execute("insert or ignore into app_settings (id) values (1)")
+            # 킷이 하나도 없으면(새 설치) 빈 '기본' 킷을 만듭니다. 내용은
+            # core.brand_seed.seed_if_empty()가 채웁니다.
+            if conn.execute("select count(*) from brand_kit").fetchone()[0] == 0:
+                conn.execute(f"insert into brand_kit (name) values ('{DEFAULT_KIT_NAME}')")
             conn.commit()
         _initialized = True
 
+
+DEFAULT_KIT_NAME = "기본"
 
 # Columns added after a database was first created. `create table if not
 # exists` silently does nothing for an existing table, so a new column in
@@ -319,23 +367,89 @@ _ADDED_COLUMNS = {
         "content_mode": "text",
         "notice_fields": "text not null default '{}'",
         "product_fields": "text not null default '{}'",
-    },
-    "brand_kit": {
-        "keyword_weights": "text not null default '{}'",
-        "non_target_keywords": "text not null default '[]'",
-        "default_content_mode": "text not null default 'balanced'",
-        "enabled_channels": """text not null default '["instagram", "x", "shorts"]'""",
+        "brand_kit_id": "integer",
+        "brand_kit_name": "text",
     },
 }
+
+# 예전 한 줄짜리 brand_kit에서 회사 공통 값과 앱 설정으로 옮겨 가는 컬럼.
+_COMPANY_COLUMNS = (
+    "brand_name", "sub_brand", "homepage", "naver_blog_id", "instagram_handle",
+    "blacklist_map", "guardrail_enabled",
+)
+_APP_SETTINGS_COLUMNS = (
+    "default_generation_vendor", "vision_vendor", "vision_quality", "vision_enabled",
+    "enabled_channels",
+)
+# 킷마다 다른 키워드 화면 진행 상태. 예전에는 키 하나씩이었고 지금은 "sweep:3"처럼 킷 ID가 붙습니다.
+KIT_STATE_KEYS = ("sweep", "category_sweep")
+
+
+def _columns(conn: sqlite3.Connection, table: str) -> list:
+    return [row["name"] for row in conn.execute(f"pragma table_info({table})")]
 
 
 def _migrate(conn: sqlite3.Connection) -> None:
     for table, columns in _ADDED_COLUMNS.items():
-        existing = {row["name"] for row in conn.execute(f"pragma table_info({table})")}
+        existing = set(_columns(conn, table))
         for name, decl in columns.items():
             if name not in existing:
                 conn.execute(f"alter table {table} add column {name} {decl}")
                 print(f"[db] migrated: {table}.{name} 컬럼 추가")
+    _migrate_single_brand_kit(conn)
+
+
+def _migrate_single_brand_kit(conn: sqlite3.Connection) -> None:
+    """예전 한 줄짜리 brand_kit(id = 1 고정)을 여러 킷 구조로 옮깁니다.
+
+    - 그 한 줄은 '기본' 킷이 되고(ID 1 유지), 기존 글은 전부 그 킷에 연결됩니다.
+    - 회사 공통 값(계정·금기어·가드레일)은 company_profile로, 앱 설정은 app_settings로 옮깁니다.
+    - 키워드 화면 진행 상태(app_state의 "sweep" 등)는 '기본' 킷의 것이 됩니다.
+
+    예전 구조인지는 brand_kit에 blacklist_map 컬럼이 있는지로 판단하므로, 한 번
+    옮긴 뒤에는 아무것도 하지 않습니다. 중간에 실패하면 전부 되돌립니다.
+    """
+    old_columns = _columns(conn, "brand_kit")
+    if "blacklist_map" not in old_columns:
+        return
+
+    conn.commit()  # 앞의 alter table까지 확정하고, 아래를 한 트랜잭션으로 묶습니다.
+    try:
+        conn.execute("begin immediate")
+        old = conn.execute("select * from brand_kit order by id limit 1").fetchone()
+        old = dict(old) if old else {}
+
+        for table, names in (("company_profile", _COMPANY_COLUMNS), ("app_settings", _APP_SETTINGS_COLUMNS)):
+            values = {k: old[k] for k in names if old.get(k) is not None}
+            conn.execute(f"insert or ignore into {table} (id) values (1)")
+            if values:
+                assignments = ", ".join(f"{k} = ?" for k in values)
+                conn.execute(f"update {table} set {assignments} where id = 1", tuple(values.values()))
+
+        conn.execute("drop table if exists brand_kit_new")
+        conn.execute(_brand_kit_ddl("brand_kit_new"))
+        shared = [c for c in _columns(conn, "brand_kit_new") if c in old_columns]
+        cols = ", ".join(shared)
+        conn.execute(f"insert into brand_kit_new ({cols}) select {cols} from brand_kit")
+        conn.execute("drop table brand_kit")
+        conn.execute("alter table brand_kit_new rename to brand_kit")
+        if conn.execute("select count(*) from brand_kit").fetchone()[0] == 0:
+            conn.execute(f"insert into brand_kit (name) values ('{DEFAULT_KIT_NAME}')")
+
+        kit = conn.execute("select id, name from brand_kit order by id limit 1").fetchone()
+        conn.execute(
+            "update campaigns set brand_kit_id = ?, brand_kit_name = ? where brand_kit_id is null",
+            (kit["id"], kit["name"]),
+        )
+        for key in KIT_STATE_KEYS:
+            conn.execute(
+                "update or ignore app_state set key = ? where key = ?", (f"{key}:{kit['id']}", key)
+            )
+        conn.execute("commit")
+    except Exception:
+        conn.execute("rollback")
+        raise
+    print("[db] migrated: 브랜드 킷을 여러 킷 구조로 옮김 (기존 킷 → '기본')")
 
 
 @contextmanager

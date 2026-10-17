@@ -91,11 +91,19 @@ def _title_generation_instruction(seo_keywords: List[str], source_title: str = "
     When SEO keywords are configured, the instruction front-loads keyword
     inclusion here — cheaper than fixing it after the fact — and
     `rewrite_title_for_keyword` below is the verify/correct backstop for
-    when the model ignores it anyway."""
+    when the model ignores it anyway.
+
+    Only a keyword that fits the post's subject: "include at least one" made
+    the model pick an unrelated pool keyword for the title (가발 관리 메모에
+    창업 교육 키워드) and then steer the body toward it. The backstop already
+    leaves such a post alone — it only enforces keywords the draft itself
+    used (see select_target_keywords)."""
     keyword_line = ""
     if seo_keywords:
         keyword_line = (
-            f" 다음 타깃 키워드 중 최소 1개를 제목에 자연스럽게 포함하세요: {', '.join(seo_keywords)}."
+            f" 다음 타깃 키워드 중 이 글의 소재와 실제로 맞는 것이 있으면 1개를 제목에 자연스럽게 "
+            f"포함하세요: {', '.join(seo_keywords)}. 소재와 맞는 키워드가 없으면 억지로 넣지 말고 "
+            "소재에 맞는 제목을 지으세요 — 관련 없는 키워드를 넣으면 글이 다른 주제로 흘러갑니다."
         )
     if source_title:
         # Newsjacking: the value is the brand's angle on the news, not the
@@ -490,7 +498,10 @@ def run_pipeline(campaign_id: str, progress: Progress = None) -> Dict:
         if not campaign:
             raise RuntimeError(f"campaign {campaign_id} not found")
 
-        brand_kit = repo.get_brand_kit()
+        brand_kit = repo.get_campaign_brand_kit(campaign)
+        # 생성할 때의 킷 이름을 글에 남깁니다 — 킷 이름이 나중에 바뀌어도 이 초안이
+        # 어느 킷으로 쓰였는지 보이게(core/db.py의 campaigns.brand_kit_name).
+        repo.update_campaign(campaign_id, brand_kit_id=brand_kit.get("id"), brand_kit_name=brand_kit.get("name"))
         storage_file_paths = campaign.get("storage_file_paths") or []
         memo = (campaign.get("memo") or "").strip()
         given_title = (campaign.get("title") or "").strip()
@@ -799,7 +810,7 @@ def revise_content(
     previous_status = repo.begin_processing(campaign_id)
     try:
         vendor = get_configured_vendor()
-        brand_kit = repo.get_brand_kit()
+        brand_kit = repo.get_campaign_brand_kit(campaign)
         seo_keywords = brand_kit.get("seo_keywords") or []
         final_title = (campaign.get("title") or "").strip() or "제목 미정"
         storage_file_paths = campaign.get("storage_file_paths") or []
@@ -1020,11 +1031,11 @@ SNS_CHANNELS = {
 }
 
 
-def enabled_channels(brand_kit: dict) -> List[str]:
+def enabled_channels(settings: dict) -> List[str]:
     """SNS channels to generate. A channel switched off costs nothing — no
     writer call and no audit call — which matters for a channel the company
     doesn't post to: each one is two LLM requests on every generation."""
-    stored = brand_kit.get("enabled_channels")
+    stored = settings.get("enabled_channels")
     if stored is None:
         return list(SNS_CHANNELS)
     return [key for key in SNS_CHANNELS if key in stored]
@@ -1167,7 +1178,7 @@ def regenerate_sns(campaign_id: str, progress: Progress = None) -> Dict:
     try:
         vendor = get_configured_vendor()
         campaign = repo.get_campaign(campaign_id)
-        brand_kit = repo.get_brand_kit()
+        brand_kit = repo.get_campaign_brand_kit(campaign)
         report = dict(campaign.get("guardrail_report") or {})
         content = campaign.get("content") or ""
         title = (campaign.get("title") or "").strip() or "제목 미정"

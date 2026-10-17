@@ -1,31 +1,21 @@
-"""씨제이씨협동조합 / 키노피스 Brand Kit — seeded from ../cjc_blog_v2/.
+"""씨제이씨협동조합 / 키노피스 브랜드 킷 시드 — 첫 실행 때 한 번만 DB에 들어가는 기본값.
 
-Everything here is lifted from the cooperative's own documents rather than
-invented, so the generated drafts cite facts the cooperative can actually
-stand behind:
+값은 지어낸 것이 아니라 조합 자료에서 옮긴 것입니다 (생성되는 초안이 조합이 실제로
+책임질 수 있는 사실만 인용하도록):
 
-- ../cjc_blog_v2/config.json
-  (persona_guide.system_persona, few_shot_samples, fact_database.company_facts,
-  compliance.whitelist_seo/blacklist_map, naver_settings.naver_blog_id)
-- ../cjc_blog_v2/AI 블로그 자동화 시스템 기획.md
-  (2014 founding, certifications, ATUM specs, KOTITI thresholds, 7~10-day
-  delivery, ESG process, market size)
-- https://atumkorea.com/ (company/ · atum/ · kinopiece/ · certificate/ —
-  설립 취지, ATUM 측정 방식·스펙, 키노피스 품목, 인증·특허 목록,
-  주소·대표·연락처)
-- ../cjc_blog_v2/README.md, AGENTS.md (domain context, compliance rules)
+- 조합 블로그 자동화 기획 자료(설정 파일의 페르소나·우수 포스팅·팩트·컴플라이언스 사전,
+  2014년 설립·인증·ATUM 스펙·KOTITI 수치·7~10일 배송·ESG 공정)
+- https://atumkorea.com/ (company/ · atum/ · kinopiece/ · certificate/ — 설립 취지,
+  ATUM 측정 방식·스펙, 키노피스 품목, 인증·특허 목록, 주소·대표·연락처)
 
-One deliberate alignment with OSMU_admin's Brand Kit: the compliance
-guardrail there was written for 의료법/표시광고법, and CJC sells custom wigs
-and scalp-care-adjacent services — so its real legal exposure is **medical
-efficacy overstatement** (탈모 완치·치료 등) under 의료법 제56조 and
-표시·광고의 공정화에 관한 법률. The blacklist and the auditor prompt
-(ai_workers/guardrail.py) are built around that instead of the greenwashing
-criteria used for the previous (upcycling) tenant.
+컴플라이언스: 조합은 맞춤가발·두피 케어 인접 서비스를 하므로 실제 법적 위험은
+의료 효능 과장(탈모 완치·치료 등)입니다 — 의료법 제56조와 표시·광고의 공정화에 관한
+법률. 금기어 사전(BLACKLIST_MAP)과 감사 프롬프트(ai_workers/guardrail.py)가 이 기준입니다.
 
-`seed_if_empty()` runs once on first launch; after that the Brand Kit page is
-the source of truth and this file is never re-applied, so admin edits are
-never clobbered.
+`seed_if_empty()`는 DB가 비어 있을 때 첫 실행에서 한 번만 '기본' 킷과 회사 공통 값을
+채웁니다. 그 뒤로는 🧵 브랜드 킷 화면이 원본이며 이 파일은 다시 적용되지 않으므로,
+관리자가 고친 내용을 덮어쓰지 않습니다. 새 킷은 화면에서 기존 킷을 복사해 만듭니다.
+이미 저장된 문구를 한 번만 고쳐야 할 때는 SEED_FIXES를 씁니다.
 """
 from __future__ import annotations
 
@@ -67,7 +57,7 @@ TONE_AND_MANNER = """- 부드러운 경어체(해요체/하십시오체 혼용)�
 - 수치와 인증은 확인된 것만 씁니다. 24개 센서·10분 스캔·7~10일·KOTITI 수치 등 팩트 DB 범위를 벗어나지 않습니다.
 - B2C 글은 따뜻하고 안심시키는 말투로, B2B·공지 글은 격식 있고 힘 있는 전문가 말투로 씁니다.
 - 출처(원문 기사 링크)는 글末에 양식화해 표기합니다.
-- 매 글 끝에 가까운 조합 가맹점 방문·창업 교육 문의·ATUM 체험으로 이어지는 부드러운 한 문장을 남깁니다."""
+- 글 주제가 가맹점 방문·창업 교육·ATUM 체험과 직접 이어질 때에만, 글 끝에 그쪽으로 안내하는 부드러운 한 문장을 남깁니다. 주제와 관계없는 글에는 넣지 않습니다."""
 
 CORE_FACTS = [
     "2014년 사단법인 대한가발협회 소속 회원들이 공동 브랜드·공동 마케팅·공동구매 수익사업을 하자는 뜻을 모아 설립한 씨제이씨협동조합(CJC Cooperative)입니다.",
@@ -150,12 +140,14 @@ FEW_SHOT_SAMPLES = [
 
 
 def seed_if_empty() -> bool:
-    """Populates the Brand Kit on first launch only. Returns True if seeded."""
+    """Populates the default kit and the company profile on first launch only.
+    Returns True if seeded."""
     existing = repo.get_brand_kit()
     if existing.get("brand_name") or existing.get("persona"):
         return False
 
     repo.save_brand_kit(
+        existing.get("id"),
         brand_name=BRAND_NAME,
         sub_brand=SUB_BRAND,
         industry=INDUSTRY,
@@ -181,42 +173,51 @@ def seed_if_empty() -> bool:
 # exists, so a fix to a seeded default would otherwise reach new installs
 # only. Each (old, new) pair is applied once, and only where `old` is still
 # present verbatim — i.e. the admin never edited that line — so admin edits
-# are still never clobbered. For a new company this list can simply be empty.
+# are still never clobbered.
 #
 # The seeded "문장은 2~3줄 안에서 끊습니다" permits 100+ character sentences,
 # so drafts stayed long-winded however often a marketer asked for shorter
 # sentences in a one-off revision (customer report). It becomes a measurable
 # limit.
+#
+# "매 글 끝에 … 창업 교육 문의 …"는 가발 관리법 같은 글에도 창업 안내를 붙여
+# "메모와 다른 사업 분야 내용이 섞인다"는 피드백의 원인이었습니다(docs/작업계획_멀티브랜드킷.md).
+# 주제가 이어질 때에만 붙이도록 바꿉니다. 창업 교육 킷에서 매번 넣고 싶으면 그 킷에서 고칩니다.
 SEED_FIXES = [
     ('- 부드러운 경어체(해요체/하십시오체 혼용)를 씁니다. 문장은 2~3줄 안에서 끊습니다.',
      '- 부드러운 경어체(해요체/하십시오체 혼용)를 씁니다.\n- 한 문장은 40자 안팎에서 끊고, 한 문단은 2~3문장까지만 씁니다. 같은 뜻을 두 번 말하지 않습니다.'),
+    ('- 매 글 끝에 가까운 조합 가맹점 방문·창업 교육 문의·ATUM 체험으로 이어지는 부드러운 한 문장을 남깁니다.',
+     '- 글 주제가 가맹점 방문·창업 교육·ATUM 체험과 직접 이어질 때에만, 글 끝에 그쪽으로 안내하는 부드러운 한 문장을 남깁니다. 주제와 관계없는 글에는 넣지 않습니다.'),
 ]
 _SEED_FIXES_STATE_KEY = "brand_seed_fixes_applied"
 
 # Same idea for the banned-term dictionary: entries added to BLACKLIST_MAP
 # after a kit was seeded. Each key is added once, and only if the admin's
 # dictionary doesn't already have it — an existing entry (with whatever
-# replacement the admin chose) always wins. Empty for a new company.
+# replacement the admin chose) always wins.
 SEED_BLACKLIST_ADDITIONS = {}
 
 
 def apply_seed_fixes() -> int:
-    """Applies SEED_FIXES to the saved tone guide and SEED_BLACKLIST_ADDITIONS
-    to the saved dictionary. Returns how many changes were made."""
+    """Applies SEED_FIXES to every kit's saved tone guide (보관된 킷 포함 — 되살렸을
+    때 예전 문구가 돌아오면 안 되므로) and SEED_BLACKLIST_ADDITIONS to the shared
+    dictionary. Returns how many changes were made."""
     done = set((repo.get_app_state(_SEED_FIXES_STATE_KEY) or {}).get("done") or [])
-    tone = repo.get_brand_kit().get("tone_and_manner") or ""
+    pending = [(old, new) for old, new in SEED_FIXES if old not in done]
     applied = 0
-    for old, new in SEED_FIXES:
-        if old in done:
-            continue
-        if old in tone:
-            tone = tone.replace(old, new)
-            applied += 1
-        done.add(old)
-    if applied:
-        repo.save_brand_kit(tone_and_manner=tone)
+    for kit in repo.list_brand_kits(include_archived=True):
+        tone = kit.get("tone_and_manner") or ""
+        changed = 0
+        for old, new in pending:
+            if old in tone:
+                tone = tone.replace(old, new)
+                changed += 1
+        if changed:
+            repo.save_brand_kit(kit["id"], tone_and_manner=tone)
+            applied += changed
+    done.update(old for old, _ in pending)
 
-    blacklist = dict(repo.get_brand_kit().get("blacklist_map") or {})
+    blacklist = dict(repo.get_company_profile().get("blacklist_map") or {})
     added = 0
     for term, replacement in SEED_BLACKLIST_ADDITIONS.items():
         marker = f"blacklist:{term}"
@@ -227,7 +228,7 @@ def apply_seed_fixes() -> int:
             added += 1
         done.add(marker)
     if added:
-        repo.save_brand_kit(blacklist_map=blacklist)
+        repo.save_company_profile(blacklist_map=blacklist)
 
     repo.set_app_state(_SEED_FIXES_STATE_KEY, {"done": sorted(done)})
     return applied + added

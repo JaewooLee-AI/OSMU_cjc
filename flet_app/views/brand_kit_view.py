@@ -1,5 +1,11 @@
 """브랜드 킷.
 
+킷은 사업 분야별로 여러 개를 둘 수 있습니다(개수 제한 없음). 화면은 세 부분입니다:
+- 킷 목록: 새로 만들기(기본 킷 복사) · 복제 · 이름 변경 · 삭제 · 되살리기.
+  삭제는 보관(숨김)이라 글에 남은 킷 연결이 끊기지 않습니다 — core/repo.archive_brand_kit.
+- 고른 킷 편집: 페르소나·톤·팩트·용어집·SEO 키워드처럼 킷마다 다른 값.
+- 회사 공통: 계정·금기어·가드레일처럼 어느 킷으로 쓰든 같은 값.
+
 Business rules (carried over from the original Streamlit screen):
 - a blank SEO-keyword weight cell means "no opinion yet" -> neutral 1.0, not 0
 - a blank "검색 타깃" checkbox means still included, not excluded
@@ -23,13 +29,224 @@ FEW_SHOT_DELIMITER = "\n---\n"
 
 
 def build(page: ft.Page, state: AppState) -> ft.Control:
+    root = ft.Container(expand=True)
+
+    def render() -> None:
+        root.content = _build_screen(page, state, render)
+        root.update()
+
+    root.content = _build_screen(page, state, render)
+    return root
+
+
+def _snack(page: ft.Page, text: str) -> None:
+    page.show_dialog(ft.SnackBar(ft.Text(text)))
+
+
+def _name_dialog(page: ft.Page, title: str, initial: str, ok_label: str, on_ok, note: str = "") -> None:
+    """이름 하나를 받는 대화상자. `on_ok(name)`이 repo.BrandKitError를 내면 창을 닫지 않고 그 문장을 보여줍니다."""
+    field = ft.TextField(label="킷 이름", value=initial, autofocus=True, width=360)
+    error = ft.Text("", color="#B3261E", size=12)
+
+    def submit(e: ft.Event) -> None:
+        try:
+            on_ok(field.value or "")
+        except repo.BrandKitError as exc:
+            error.value = str(exc)
+            error.update()
+            return
+        page.pop_dialog()
+
+    field.on_submit = submit
+    page.show_dialog(ft.AlertDialog(
+        modal=True,
+        title=ft.Text(title),
+        content=ft.Column(
+            [*([ft.Text(note, size=12, color=BRAND_COLORS["text_muted"])] if note else []), field, error],
+            tight=True, spacing=8,
+        ),
+        actions=[
+            ft.TextButton("취소", on_click=lambda e: page.pop_dialog()),
+            ft.FilledButton(ok_label, on_click=submit),
+        ],
+    ))
+
+
+def _archive_dialog(page: ft.Page, kit: dict, others: list[dict], on_done) -> None:
+    """킷 삭제(보관) 확인. 아직 게시하지 않은 글이 이 킷을 쓰면, 다른 킷으로 옮길지 고르게 합니다."""
+    unpublished = repo.count_campaigns_using_kit(kit["id"])
+    move_choice = [None]
+    body: list[ft.Control] = [ft.Text(
+        f"'{kit['name']}' 킷을 삭제할까요? 삭제한 킷은 이 화면 아래 '삭제한 킷'에서 언제든 되살릴 수 있습니다. "
+        "이미 쓴 글에는 킷 이름이 그대로 남습니다.",
+        size=13,
+    )]
+    confirm = ft.FilledButton("삭제", bgcolor="#B3261E", color=ft.Colors.WHITE)
+
+    if unpublished:
+        keep_key = "keep"
+        choice = ft.Dropdown(
+            label="아직 게시하지 않은 글을…",
+            width=360,
+            options=[ft.DropdownOption(key=str(k["id"]), text=f"'{k['name']}' 킷으로 옮기기") for k in others]
+            + [ft.DropdownOption(key=keep_key, text="옮기지 않기 (이 킷으로 계속 다시 생성할 수 있음)")],
+        )
+
+        def on_choice(e: ft.Event) -> None:
+            move_choice[0] = None if choice.value == keep_key else int(choice.value)
+            confirm.disabled = not choice.value
+            confirm.update()
+
+        choice.on_select = on_choice
+        confirm.disabled = True
+        body += [
+            ft.Text(
+                f"⚠️ 아직 게시하지 않은 글 {unpublished}개가 이 킷을 씁니다. 다른 킷으로 옮길지 골라주세요. "
+                "옮긴 글은 다음에 생성할 때부터 새 킷을 씁니다(이미 만든 초안은 그대로).",
+                size=12, color="#8A6D3B",
+            ),
+            choice,
+        ]
+    error = ft.Text("", color="#B3261E", size=12)
+    body.append(error)
+
+    def do_archive(e: ft.Event) -> None:
+        try:
+            moved = repo.archive_brand_kit(kit["id"], move_unpublished_to=move_choice[0])
+        except repo.BrandKitError as exc:
+            error.value = str(exc)
+            error.update()
+            return
+        page.pop_dialog()
+        on_done(moved)
+
+    confirm.on_click = do_archive
+    page.show_dialog(ft.AlertDialog(
+        modal=True,
+        title=ft.Text("브랜드 킷 삭제"),
+        content=ft.Column(body, tight=True, spacing=8, width=420),
+        actions=[ft.TextButton("취소", on_click=lambda e: page.pop_dialog()), confirm],
+    ))
+
+
+def _build_kit_list(page: ft.Page, state: AppState, render, scale: float, kits: list[dict],
+                    archived: list[dict], kit_id: int) -> ft.Control:
+    def select(target: int) -> None:
+        state.editing_brand_kit_id = target
+        render()
+
+    def on_new(e: ft.Event) -> None:
+        base = kits[0]
+
+        def create(name: str) -> None:
+            select(repo.create_brand_kit(name, copy_from=base["id"]))
+            _snack(page, f"'{name.strip()}' 킷을 만들었습니다. 내용은 '{base['name']}' 킷을 복사한 것이니 이 분야에 맞게 고쳐주세요.")
+
+        _name_dialog(
+            page, "새 브랜드 킷", "", "만들기", create,
+            note=f"맨 위 '{base['name']}' 킷의 내용을 복사해서 시작합니다. 예: 가발 판매·관리 / 창업 교육 / 두피·항암",
+        )
+
+    def on_duplicate(kit: dict) -> None:
+        def create(name: str) -> None:
+            select(repo.create_brand_kit(name, copy_from=kit["id"]))
+            _snack(page, f"'{kit['name']}' 킷을 복제했습니다.")
+
+        _name_dialog(page, f"'{kit['name']}' 킷 복제", repo.unique_kit_name(f"{kit['name']} 복사본"), "복제", create)
+
+    def on_rename(kit: dict) -> None:
+        def rename(name: str) -> None:
+            repo.save_brand_kit(kit["id"], name=name)
+            render()
+
+        _name_dialog(
+            page, "킷 이름 변경", kit["name"], "변경", rename,
+            note="이미 쓴 글에는 그 글을 생성할 때의 이름이 남습니다.",
+        )
+
+    def on_archive(kit: dict) -> None:
+        if len(kits) <= 1:
+            _snack(page, "마지막 남은 브랜드 킷은 삭제할 수 없습니다. 새 킷을 먼저 만들어주세요.")
+            return
+
+        def done(moved: int) -> None:
+            if state.editing_brand_kit_id == kit["id"]:
+                state.editing_brand_kit_id = None
+            render()
+            _snack(page, f"'{kit['name']}' 킷을 삭제했습니다." + (f" 글 {moved}개를 옮겼습니다." if moved else ""))
+
+        _archive_dialog(page, kit, [k for k in kits if k["id"] != kit["id"]], done)
+
+    def on_restore(kit: dict) -> None:
+        name = repo.restore_brand_kit(kit["id"])
+        state.editing_brand_kit_id = kit["id"]
+        render()
+        _snack(page, f"'{name}' 킷을 되살렸습니다.")
+
+    rows: list[ft.Control] = []
+    for i, kit in enumerate(kits):
+        selected = kit["id"] == kit_id
+        rows.append(ft.Container(
+            content=ft.Row(
+                [
+                    ft.Text(kit["name"], weight=ft.FontWeight.BOLD, size=fs(14, scale), expand=True),
+                    *([ft.Text("기본 · 새 킷은 이 킷을 복사", size=fs(11, scale), color=BRAND_COLORS["text_muted"])] if i == 0 else []),
+                    ft.Text("✏️ 편집 중", size=fs(12, scale), color=BRAND_COLORS["primary"]) if selected
+                    else ft.TextButton("편집", on_click=lambda e, k=kit: select(k["id"])),
+                    ft.TextButton("📄 복제", on_click=lambda e, k=kit: on_duplicate(k)),
+                    ft.TextButton("이름 변경", on_click=lambda e, k=kit: on_rename(k)),
+                    ft.TextButton("🗑️ 삭제", on_click=lambda e, k=kit: on_archive(k)),
+                ],
+            ),
+            bgcolor="#EDE6DD" if selected else ft.Colors.WHITE,
+            border=ft.Border.all(1, "#14000000"),
+            border_radius=8,
+            padding=ft.Padding.symmetric(horizontal=12, vertical=4),
+        ))
+
+    controls: list[ft.Control] = [
+        ft.Text("🧵 킷 목록", weight=ft.FontWeight.BOLD),
+        ft.Text(
+            "사업 분야마다 킷을 두고, 워크벤치에서 글마다 어느 킷으로 쓸지 고릅니다. "
+            "분야에 맞지 않는 킷을 고르면 다른 분야 내용이 섞이니, 글의 주제에 맞는 킷을 골라주세요.",
+            size=fs(12, scale), color=BRAND_COLORS["text_muted"],
+        ),
+        *rows,
+        ft.Row([ft.FilledButton("➕ 새 킷 만들기", on_click=on_new)]),
+    ]
+    if archived:
+        controls.append(ft.ExpansionTile(
+            title=ft.Text(f"삭제한 킷 {len(archived)}개", size=fs(13, scale)),
+            controls=[
+                ft.Row([
+                    ft.Text(k["name"], expand=True, size=fs(13, scale)),
+                    ft.TextButton("↩️ 되살리기", on_click=lambda e, k=k: on_restore(k)),
+                ])
+                for k in archived
+            ],
+        ))
+    return ft.Column(controls, spacing=6)
+
+
+def _build_screen(page: ft.Page, state: AppState, render) -> ft.Control:
     scale = state.font_scale
-    existing = repo.get_brand_kit()
+    kits = repo.list_brand_kits()
+    archived = [k for k in repo.list_brand_kits(include_archived=True) if k.get("is_archived")]
+    active_ids = {k["id"] for k in kits}
+    kit_id = state.editing_brand_kit_id if state.editing_brand_kit_id in active_ids else kits[0]["id"]
+    state.editing_brand_kit_id = kit_id
+    existing = repo.get_brand_kit(kit_id)
+    kit_name = existing.get("name") or ""
 
     # --- 기업 · 채널 ---------------------------------------------------------
     brand_name = ft.TextField(label="기업명", value=existing.get("brand_name") or "", expand=True)
     sub_brand = ft.TextField(label="브랜드명", value=existing.get("sub_brand") or "", expand=True)
-    industry = ft.TextField(label="업종", value=existing.get("industry") or "", expand=True)
+    industry = ft.TextField(
+        label="업종 · 사업 분야",
+        value=existing.get("industry") or "",
+        helper="이 킷이 다루는 분야. 키워드 추천과 글의 배경 설명에 쓰입니다.",
+        expand=True,
+    )
     homepage = ft.TextField(label="홈페이지", value=existing.get("homepage") or "", expand=True)
     naver_blog_id = ft.TextField(
         label="네이버 블로그 아이디",
@@ -194,9 +411,6 @@ def build(page: ft.Page, state: AppState) -> ft.Control:
         new_terminology = {
             row["term"]: row["desc"] for row in terminology_table.get_rows() if row["term"]
         }
-        new_blacklist = {
-            row["bad"]: row["good"] for row in blacklist_table.get_rows() if row["bad"]
-        }
 
         new_keywords: list[str] = []
         new_weights: dict[str, float] = {}
@@ -211,13 +425,8 @@ def build(page: ft.Page, state: AppState) -> ft.Control:
                 new_non_targets.append(kw)
 
         repo.save_brand_kit(
-            brand_name=brand_name.value,
-            sub_brand=sub_brand.value,
+            kit_id,
             industry=industry.value,
-            homepage=homepage.value,
-            naver_blog_id=naver_blog_id.value,
-            instagram_handle=instagram_handle.value,
-            guardrail_enabled=guardrail_enabled.value,
             persona=persona.value,
             tone_and_manner=tone_and_manner.value,
             core_facts=core_facts,
@@ -226,18 +435,36 @@ def build(page: ft.Page, state: AppState) -> ft.Control:
             keyword_weights=new_weights,
             non_target_keywords=new_non_targets,
             default_content_mode=mode_dropdown.value,
-            blacklist_map=new_blacklist,
             few_shot_samples=few_shot_samples,
         )
 
-        guardrail_warning_box.visible = not guardrail_enabled.value
         save_status.value = (
-            f"✅ 저장했습니다. (핵심 팩트 {len(core_facts)} · 용어 {len(new_terminology)} · "
-            f"SEO 키워드 {len(new_keywords)} · 금기어 {len(new_blacklist)} · 샘플 {len(few_shot_samples)})"
+            f"✅ '{kit_name}' 킷을 저장했습니다. (핵심 팩트 {len(core_facts)} · 용어 {len(new_terminology)} · "
+            f"SEO 키워드 {len(new_keywords)} · 샘플 {len(few_shot_samples)})"
         )
         page.update()
 
-    save_button = ft.FilledButton("저장", icon=ft.Icons.SAVE, on_click=on_save)
+    common_status = ft.Text("", size=fs(12, scale), color="#1B6E3C")
+
+    def on_save_common(e: ft.Event) -> None:
+        new_blacklist = {
+            row["bad"]: row["good"] for row in blacklist_table.get_rows() if row["bad"]
+        }
+        repo.save_company_profile(
+            brand_name=brand_name.value,
+            sub_brand=sub_brand.value,
+            homepage=homepage.value,
+            naver_blog_id=naver_blog_id.value,
+            instagram_handle=instagram_handle.value,
+            guardrail_enabled=guardrail_enabled.value,
+            blacklist_map=new_blacklist,
+        )
+        guardrail_warning_box.visible = not guardrail_enabled.value
+        common_status.value = f"✅ 회사 공통 값을 저장했습니다. (금기어 {len(new_blacklist)}) 모든 킷에 적용됩니다."
+        page.update()
+
+    save_button = ft.FilledButton(f"'{kit_name}' 킷 저장", icon=ft.Icons.SAVE, on_click=on_save)
+    common_save_button = ft.FilledButton("회사 공통 저장", icon=ft.Icons.SAVE, on_click=on_save_common)
 
     # --- 제목 반복 방지 (Streamlit에선 "폼 밖" 제약이 있었지만 Flet엔 없음) -------
     history_count = repo.title_history_count()
@@ -286,36 +513,50 @@ def build(page: ft.Page, state: AppState) -> ft.Control:
                 color=BRAND_COLORS["text_muted"],
             ),
             ft.Divider(),
-            ft.Text("🎨 브랜드 컬러", weight=ft.FontWeight.BOLD),
-            palette_row(scale=scale),
+            _build_kit_list(page, state, render, scale, kits, archived, kit_id),
             ft.Divider(),
-            ft.Text("🏢 기업 · 채널", weight=ft.FontWeight.BOLD),
-            ft.Row([brand_name, sub_brand]),
+            ft.Text(f"✏️ '{kit_name}' 킷 편집", size=fs(18, scale), weight=ft.FontWeight.BOLD),
+            ft.Text(
+                "아래 값은 이 킷으로 쓰는 글에만 쓰입니다. 저장하지 않은 수정은 다른 킷을 편집하러 가면 사라집니다.",
+                size=fs(12, scale),
+                color=BRAND_COLORS["text_muted"],
+            ),
             industry,
-            ft.Row([homepage, naver_blog_id, instagram_handle]),
-            ft.Divider(),
-            guardrail_enabled,
             persona,
             tone_and_manner,
             ft.Divider(),
-            ft.Text("🏭 회사 핵심 팩트", weight=ft.FontWeight.BOLD),
+            ft.Text("🏭 핵심 팩트", weight=ft.FontWeight.BOLD),
             core_facts_field,
             ft.Divider(),
-            ft.Text("📖 회사 용어집", weight=ft.FontWeight.BOLD),
+            ft.Text("📖 용어집", weight=ft.FontWeight.BOLD),
             terminology_table.build(),
             ft.Divider(),
             mode_dropdown,
             mode_captions,
             ft.Divider(),
             ft.Text("🔍 SEO 키워드 (네이버 블로그 전용)", weight=ft.FontWeight.BOLD),
+            ft.Text(
+                "이 킷의 분야 키워드만 넣어주세요. 키워드를 새로 고르거나 분야를 더하는 작업은 "
+                "⚙️ 설정 → 네이버 API에서 대상 킷을 고른 뒤 합니다.",
+                size=fs(12, scale), color=BRAND_COLORS["text_muted"],
+            ),
             keywords_table.build(),
             *([freshness_banner] if freshness_banner else []),
             ft.Divider(),
-            ft.Text("🚫 금기어 치환 사전 (의료법·표시광고법)", weight=ft.FontWeight.BOLD),
-            blacklist_table.build(),
-            ft.Divider(),
             few_shot_field,
             ft.Row([save_button, save_status]),
+            ft.Divider(thickness=3),
+            ft.Text("🏢 회사 공통 (모든 킷에 적용)", size=fs(18, scale), weight=ft.FontWeight.BOLD),
+            ft.Text("🎨 브랜드 컬러", weight=ft.FontWeight.BOLD),
+            palette_row(scale=scale),
+            ft.Text("기업 · 채널", weight=ft.FontWeight.BOLD),
+            ft.Row([brand_name, sub_brand]),
+            ft.Row([homepage, naver_blog_id, instagram_handle]),
+            ft.Divider(),
+            guardrail_enabled,
+            ft.Text("🚫 금기어 치환 사전 (의료법·표시광고법)", weight=ft.FontWeight.BOLD),
+            blacklist_table.build(),
+            ft.Row([common_save_button, common_status]),
             guardrail_warning_box,
             ft.Divider(),
             history_section,

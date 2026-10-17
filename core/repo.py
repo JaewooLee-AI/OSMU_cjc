@@ -10,7 +10,14 @@ from __future__ import annotations
 import uuid
 from typing import Any, Dict, List, Optional
 
-from core.db import dumps, get_conn, loads
+from core.db import (
+    _APP_SETTINGS_COLUMNS,
+    _COMPANY_COLUMNS,
+    DEFAULT_KIT_NAME,
+    dumps,
+    get_conn,
+    loads,
+)
 
 # --- column encoding map ----------------------------------------------------
 # name -> default value when the column is empty/absent.
@@ -33,12 +40,25 @@ _BRAND_KIT_JSON_COLS = {
     "seo_keywords": [],
     "keyword_weights": {},
     "non_target_keywords": [],
-    "enabled_channels": ["instagram", "x", "shorts"],
-    "blacklist_map": {},
 }
+_COMPANY_JSON_COLS = {"blacklist_map": {}}
+_APP_SETTINGS_JSON_COLS = {"enabled_channels": ["instagram", "x", "shorts"]}
 
 _CAMPAIGN_BOOL_COLS = ("guardrail_passed",)
-_BRAND_KIT_BOOL_COLS = ("guardrail_enabled", "vision_enabled")
+_BRAND_KIT_BOOL_COLS = ("is_archived",)
+_COMPANY_BOOL_COLS = ("guardrail_enabled",)
+_APP_SETTINGS_BOOL_COLS = ("vision_enabled",)
+
+# 킷마다 따로 두는 값. 이 밖의 값은 회사 공통(company_profile)이거나 앱 설정(app_settings)입니다.
+BRAND_KIT_FIELDS = (
+    "name", "industry", "persona", "tone_and_manner", "core_facts", "few_shot_samples",
+    "terminology", "seo_keywords", "keyword_weights", "non_target_keywords",
+    "default_content_mode",
+)
+# 킷을 복제할 때 옮기는 값 — 이름만 빼고 전부.
+_KIT_COPY_FIELDS = tuple(f for f in BRAND_KIT_FIELDS if f != "name")
+COMPANY_FIELDS = _COMPANY_COLUMNS
+APP_SETTINGS_FIELDS = _APP_SETTINGS_COLUMNS
 
 
 def _decode(row, json_cols: Dict[str, Any], bool_cols) -> Optional[Dict[str, Any]]:
@@ -107,29 +127,242 @@ def delete_llm_setting(vendor: str) -> None:
         conn.execute("delete from llm_settings where vendor = ?", (vendor,))
 
 
-# --- brand_kit --------------------------------------------------------------
+# --- brand_kit · company_profile · app_settings -----------------------------
+# 브랜드 킷은 여러 개이고(사업 분야별), 회사 공통 값과 앱 설정은 한 줄씩입니다.
+# get_brand_kit()은 셋을 합친 dict를 돌려줍니다 — 생성 파이프라인은 "이 글을 쓸 때
+# 필요한 모든 값"을 한 번에 받으면 되고, 어느 값이 어느 테이블에 있는지 몰라도 됩니다.
 
-def get_brand_kit() -> Dict[str, Any]:
+class BrandKitError(ValueError):
+    """킷 보관·이름 규칙 위반 — 화면에 그대로 보여줄 수 있는 문장을 담습니다."""
+
+
+def get_company_profile() -> Dict[str, Any]:
     with get_conn() as conn:
-        row = conn.execute("select * from brand_kit where id = 1").fetchone()
-    return _decode(row, _BRAND_KIT_JSON_COLS, _BRAND_KIT_BOOL_COLS) or {}
+        row = conn.execute("select * from company_profile where id = 1").fetchone()
+    data = _decode(row, _COMPANY_JSON_COLS, _COMPANY_BOOL_COLS) or {}
+    data.pop("id", None)
+    data.pop("updated_at", None)
+    return data
 
 
-def save_brand_kit(**fields) -> None:
+def save_company_profile(**fields) -> None:
+    _save_single_row("company_profile", COMPANY_FIELDS, _COMPANY_JSON_COLS, _COMPANY_BOOL_COLS, fields)
+
+
+def get_app_settings() -> Dict[str, Any]:
+    with get_conn() as conn:
+        row = conn.execute("select * from app_settings where id = 1").fetchone()
+    data = _decode(row, _APP_SETTINGS_JSON_COLS, _APP_SETTINGS_BOOL_COLS) or {}
+    data.pop("id", None)
+    data.pop("updated_at", None)
+    return data
+
+
+def save_app_settings(**fields) -> None:
+    _save_single_row("app_settings", APP_SETTINGS_FIELDS, _APP_SETTINGS_JSON_COLS, _APP_SETTINGS_BOOL_COLS, fields)
+
+
+def _save_single_row(table: str, allowed, json_cols, bool_cols, fields: Dict[str, Any]) -> None:
+    unknown = set(fields) - set(allowed)
+    if unknown:
+        raise KeyError(f"{table}에 없는 항목: {sorted(unknown)}")
     if not fields:
         return
-    encoded = _encode(fields, _BRAND_KIT_JSON_COLS, _BRAND_KIT_BOOL_COLS)
+    encoded = _encode(fields, json_cols, bool_cols)
     assignments = ", ".join(f"{k} = ?" for k in encoded)
     with get_conn() as conn:
-        conn.execute("insert or ignore into brand_kit (id) values (1)")
+        conn.execute(f"insert or ignore into {table} (id) values (1)")
         conn.execute(
-            f"update brand_kit set {assignments}, updated_at = datetime('now') where id = 1",
+            f"update {table} set {assignments}, updated_at = datetime('now') where id = 1",
             tuple(encoded.values()),
         )
 
 
-def append_tone_rule(rule: str) -> bool:
-    """Adds `rule` as a new "- " bullet at the end of the tone guide.
+def list_brand_kits(include_archived: bool = False) -> List[Dict[str, Any]]:
+    """킷 목록(킷 값만, 공통 값은 합치지 않음). 보관된 킷은 뒤에 옵니다."""
+    sql = "select * from brand_kit"
+    if not include_archived:
+        sql += " where is_archived = 0"
+    sql += " order by is_archived, sort_order, id"
+    with get_conn() as conn:
+        rows = conn.execute(sql).fetchall()
+    return [_decode(r, _BRAND_KIT_JSON_COLS, _BRAND_KIT_BOOL_COLS) for r in rows]
+
+
+def default_brand_kit_id() -> Optional[int]:
+    """목록 맨 앞의(보관되지 않은) 킷 — 킷을 고르지 않은 곳이 쓰는 킷입니다."""
+    with get_conn() as conn:
+        row = conn.execute(
+            "select id from brand_kit order by is_archived, sort_order, id limit 1"
+        ).fetchone()
+    return row["id"] if row else None
+
+
+def _get_kit_row(kit_id: Optional[int]) -> Optional[Dict[str, Any]]:
+    with get_conn() as conn:
+        row = None
+        if kit_id is not None:
+            row = conn.execute("select * from brand_kit where id = ?", (kit_id,)).fetchone()
+        if row is None:
+            row = conn.execute(
+                "select * from brand_kit order by is_archived, sort_order, id limit 1"
+            ).fetchone()
+    return _decode(row, _BRAND_KIT_JSON_COLS, _BRAND_KIT_BOOL_COLS)
+
+
+def get_brand_kit(kit_id: Optional[int] = None) -> Dict[str, Any]:
+    """킷 값 + 회사 공통 값 + 앱 설정을 합친 dict.
+
+    `kit_id`가 None이거나 없는 킷이면 기본 킷(default_brand_kit_id)을 씁니다.
+    보관된 킷도 ID로 직접 부르면 그대로 돌려줍니다 — 그 킷으로 쓰던 글은 계속
+    그 킷으로 다시 생성할 수 있어야 하기 때문입니다.
+    """
+    merged: Dict[str, Any] = {}
+    merged.update(get_app_settings())
+    merged.update(get_company_profile())
+    kit = _get_kit_row(kit_id) or {}
+    merged.update(kit)
+    return merged
+
+
+def get_campaign_brand_kit(campaign: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    """글에 연결된 킷으로 get_brand_kit()을 부릅니다."""
+    return get_brand_kit((campaign or {}).get("brand_kit_id"))
+
+
+def save_brand_kit(kit_id: Optional[int] = None, **fields) -> None:
+    """값마다 맞는 테이블에 저장합니다 — 킷 값은 `kit_id` 킷에(None이면 기본 킷),
+    회사 공통 값은 company_profile에, 앱 설정은 app_settings에."""
+    kit_fields = {k: v for k, v in fields.items() if k in BRAND_KIT_FIELDS}
+    company_fields = {k: v for k, v in fields.items() if k in COMPANY_FIELDS}
+    app_fields = {k: v for k, v in fields.items() if k in APP_SETTINGS_FIELDS}
+    unknown = set(fields) - set(kit_fields) - set(company_fields) - set(app_fields)
+    if unknown:
+        raise KeyError(f"브랜드 킷에 없는 항목: {sorted(unknown)}")
+    if company_fields:
+        save_company_profile(**company_fields)
+    if app_fields:
+        save_app_settings(**app_fields)
+    if not kit_fields:
+        return
+    if "name" in kit_fields:
+        kit_fields["name"] = _clean_kit_name(kit_fields["name"], exclude_id=kit_id)
+    target = kit_id if kit_id is not None else default_brand_kit_id()
+    encoded = _encode(kit_fields, _BRAND_KIT_JSON_COLS, _BRAND_KIT_BOOL_COLS)
+    assignments = ", ".join(f"{k} = ?" for k in encoded)
+    with get_conn() as conn:
+        conn.execute(
+            f"update brand_kit set {assignments}, updated_at = datetime('now') where id = ?",
+            tuple(encoded.values()) + (target,),
+        )
+
+
+def _clean_kit_name(name: Optional[str], exclude_id: Optional[int] = None) -> str:
+    """앞뒤 공백을 지우고, 빈 이름과 (보관되지 않은 킷끼리) 같은 이름을 막습니다.
+    선택 목록에서 같은 이름 두 개는 구별할 수 없기 때문입니다."""
+    cleaned = " ".join((name or "").split())
+    if not cleaned:
+        raise BrandKitError("킷 이름을 입력해주세요.")
+    with get_conn() as conn:
+        row = conn.execute(
+            "select id from brand_kit where name = ? and is_archived = 0 and id != ?",
+            (cleaned, exclude_id if exclude_id is not None else -1),
+        ).fetchone()
+    if row:
+        raise BrandKitError(f"'{cleaned}' 이름의 킷이 이미 있습니다. 다른 이름을 써주세요.")
+    return cleaned
+
+
+def unique_kit_name(base: str) -> str:
+    """'기본 복사본', '기본 복사본 2' … 처럼 겹치지 않는 이름을 만듭니다."""
+    existing = {k["name"] for k in list_brand_kits()}
+    if base not in existing:
+        return base
+    n = 2
+    while f"{base} {n}" in existing:
+        n += 1
+    return f"{base} {n}"
+
+
+def create_brand_kit(name: str, copy_from: Optional[int] = None) -> int:
+    """새 킷을 만들고 ID를 돌려줍니다. 내용은 `copy_from` 킷(None이면 기본 킷)을 그대로 복사합니다."""
+    cleaned = _clean_kit_name(name)
+    source = _get_kit_row(copy_from) or {}
+    values = {k: source.get(k) for k in _KIT_COPY_FIELDS if source.get(k) is not None}
+    encoded = _encode(values, _BRAND_KIT_JSON_COLS, _BRAND_KIT_BOOL_COLS)
+    cols = ["name", "sort_order", *encoded.keys()]
+    with get_conn() as conn:
+        next_order = conn.execute("select coalesce(max(sort_order), 0) + 1 as n from brand_kit").fetchone()["n"]
+        cur = conn.execute(
+            f"insert into brand_kit ({', '.join(cols)}) values ({', '.join('?' * len(cols))})",
+            (cleaned, next_order, *encoded.values()),
+        )
+        return cur.lastrowid
+
+
+def count_campaigns_using_kit(kit_id: int, unpublished_only: bool = True) -> int:
+    sql = "select count(*) as n from campaigns where brand_kit_id = ?"
+    if unpublished_only:
+        sql += " and status != 'published'"
+    with get_conn() as conn:
+        return conn.execute(sql, (kit_id,)).fetchone()["n"]
+
+
+def archive_brand_kit(kit_id: int, move_unpublished_to: Optional[int] = None) -> int:
+    """킷을 보관(화면 표기 '삭제')합니다. 행은 지우지 않으므로 restore_brand_kit으로 되살릴 수 있습니다.
+
+    `move_unpublished_to`를 주면 그 킷을 쓰던, 아직 게시되지 않은 글을 그 킷으로 옮기고
+    옮긴 글 수를 돌려줍니다. 보관되지 않은 마지막 킷은 보관할 수 없습니다.
+    """
+    with get_conn() as conn:
+        conn.execute("begin immediate")
+        active = [r["id"] for r in conn.execute("select id from brand_kit where is_archived = 0")]
+        if kit_id not in active:
+            return 0
+        if len(active) <= 1:
+            raise BrandKitError("마지막 남은 브랜드 킷은 삭제할 수 없습니다. 새 킷을 먼저 만들어주세요.")
+        moved = 0
+        if move_unpublished_to is not None:
+            target = conn.execute(
+                "select id, name from brand_kit where id = ? and is_archived = 0", (move_unpublished_to,)
+            ).fetchone()
+            if target is None or target["id"] == kit_id:
+                raise BrandKitError("글을 옮길 킷을 다시 골라주세요.")
+            moved = conn.execute(
+                "update campaigns set brand_kit_id = ?, brand_kit_name = ?, updated_at = datetime('now') "
+                "where brand_kit_id = ? and status != 'published'",
+                (target["id"], target["name"], kit_id),
+            ).rowcount
+        conn.execute(
+            "update brand_kit set is_archived = 1, updated_at = datetime('now') where id = ?", (kit_id,)
+        )
+        return moved
+
+
+def restore_brand_kit(kit_id: int) -> str:
+    """보관한 킷을 되살리고 최종 이름을 돌려줍니다. 그 사이 같은 이름의 킷이
+    생겼으면 '(되살림)'을 붙여 겹치지 않게 합니다."""
+    kit = _get_kit_row(kit_id)
+    if not kit or kit.get("id") != kit_id:
+        raise BrandKitError("되살릴 킷을 찾지 못했습니다.")
+    name = kit.get("name") or DEFAULT_KIT_NAME
+    if name in {k["name"] for k in list_brand_kits()}:
+        name = unique_kit_name(f"{name} (되살림)")
+    with get_conn() as conn:
+        conn.execute(
+            "update brand_kit set is_archived = 0, name = ?, updated_at = datetime('now') where id = ?",
+            (name, kit_id),
+        )
+    return name
+
+
+def kit_state_key(base: str, kit_id: int) -> str:
+    """킷마다 따로 두는 app_state 키 — 예: kit_state_key("sweep", 3) == "sweep:3"."""
+    return f"{base}:{kit_id}"
+
+
+def append_tone_rule(rule: str, kit_id: Optional[int] = None) -> bool:
+    """Adds `rule` as a new "- " bullet at the end of the kit's tone guide.
 
     Returns False (and changes nothing) if the guide already contains it.
     Backs the workbench's "이 요청을 브랜드 킷에 저장" button: a revision
@@ -139,11 +372,12 @@ def append_tone_rule(rule: str) -> bool:
     rule = " ".join((rule or "").split()).lstrip("-• ").strip()
     if not rule:
         return False
-    current = (get_brand_kit().get("tone_and_manner") or "").rstrip()
+    kit = get_brand_kit(kit_id)
+    current = (kit.get("tone_and_manner") or "").rstrip()
     if rule in current:
         return False
     updated = f"{current}\n- {rule}" if current else f"- {rule}"
-    save_brand_kit(tone_and_manner=updated)
+    save_brand_kit(kit.get("id"), tone_and_manner=updated)
     return True
 
 
@@ -204,17 +438,28 @@ def insert_campaign(
     memo: Optional[str] = None,
     status: str = "awaiting_media",
     source_title: Optional[str] = None,
+    brand_kit_id: Optional[int] = None,
 ) -> Dict[str, Any]:
+    """`brand_kit_id`가 None이면 기본 킷에 연결합니다."""
     campaign_id = uuid.uuid4().hex
+    kit = _get_kit_row(brand_kit_id) or {}
     with get_conn() as conn:
         conn.execute(
             """
-            insert into campaigns (id, source_type, source_url, source_title, title, memo, status)
-            values (?, ?, ?, ?, ?, ?, ?)
+            insert into campaigns (id, source_type, source_url, source_title, title, memo, status,
+                                   brand_kit_id, brand_kit_name)
+            values (?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
-            (campaign_id, source_type, source_url, source_title, title, memo, status),
+            (campaign_id, source_type, source_url, source_title, title, memo, status,
+             kit.get("id"), kit.get("name")),
         )
     return get_campaign(campaign_id)
+
+
+def set_campaign_brand_kit(campaign_id: str, kit_id: int) -> None:
+    """글의 킷을 바꾸고 이름 스냅샷도 그 킷의 지금 이름으로 맞춥니다."""
+    kit = _get_kit_row(kit_id) or {}
+    update_campaign(campaign_id, brand_kit_id=kit.get("id"), brand_kit_name=kit.get("name"))
 
 
 def update_campaign(campaign_id: str, **fields) -> None:

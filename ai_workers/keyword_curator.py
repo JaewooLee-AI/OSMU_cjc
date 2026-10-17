@@ -13,7 +13,7 @@ facts, persona), so the judgment runs there: candidates plus brand kit go to
 the configured model, which drops the irrelevant ones and files the rest by
 search intent. The intent groups are fixed and deliberately generic — they
 describe why someone typed the query, not what the company sells, so they
-hold for the next tenant of this app without a code change.
+hold for every brand kit without a code change.
 
 Nothing here writes to the brand kit. `propose()` returns a proposal; the
 settings screen renders it as a diff and the human applies it.
@@ -97,8 +97,9 @@ SYSTEM_PROMPT = (
 )
 
 
-def _brand_context() -> str:
-    kit = repo.get_brand_kit()
+def _brand_context(kit_id: Optional[int] = None) -> str:
+    # 킷마다 업종·핵심 사실이 다르므로 키워드도 고른 킷 기준으로 찾습니다.
+    kit = repo.get_brand_kit(kit_id)
     facts = kit.get("core_facts") or []
     return (
         f"브랜드명: {kit.get('brand_name') or '-'}\n"
@@ -120,7 +121,8 @@ def _parse(raw: str) -> dict:
 
 
 def propose(
-    scored: List[dict], *, current: Optional[List[str]] = None, vendor: Optional[str] = None
+    scored: List[dict], *, current: Optional[List[str]] = None, vendor: Optional[str] = None,
+    kit_id: Optional[int] = None,
 ) -> dict:
     """Group `keyword_research` output into an applyable proposal.
 
@@ -162,7 +164,7 @@ def propose(
         metrics_lines.append(line)
 
     prompt = (
-        f"{_brand_context()}\n\n"
+        f"{_brand_context(kit_id)}\n\n"
         f"현재 SEO 키워드: {', '.join(current) if current else '(없음)'}\n\n"
         f"키워드 후보와 지표:\n" + "\n".join(metrics_lines)
     )
@@ -315,7 +317,7 @@ SEED_SYSTEM_PROMPT = (
 )
 
 
-def suggest_seeds(vendor: Optional[str] = None) -> List[str]:
+def suggest_seeds(vendor: Optional[str] = None, kit_id: Optional[int] = None) -> List[str]:
     """Seed keywords for a sweep, derived from the brand kit.
 
     Defaulting the seed box to the brand's own SEO pool was a dead end: that
@@ -330,7 +332,7 @@ def suggest_seeds(vendor: Optional[str] = None) -> List[str]:
     """
     raw = generate_text(
         vendor=vendor or get_configured_vendor(),
-        prompt=_brand_context(),
+        prompt=_brand_context(kit_id),
         system=SEED_SYSTEM_PROMPT,
         max_tokens=500,
         note="keyword-seeds",
@@ -349,8 +351,8 @@ GROUP_DEFAULT_WEIGHT = {
 }
 
 
-def apply(keywords: List[str], proposal: Optional[dict] = None) -> None:
-    """Write the approved list to the brand kit. Deliberately the only
+def apply(keywords: List[str], proposal: Optional[dict] = None, kit_id: Optional[int] = None) -> None:
+    """Write the approved list to the brand kit `kit_id` (None = the default kit). Deliberately the only
     function here that mutates anything, and never called by `propose`.
 
     `proposal` carries the group each keyword landed in, and writing it is the
@@ -377,7 +379,7 @@ def apply(keywords: List[str], proposal: Optional[dict] = None) -> None:
             for gkey, rows in (proposal.get("groups") or {}).items()
             for row in rows
         }
-        existing = repo.get_brand_kit()
+        existing = repo.get_brand_kit(kit_id)
         weights = dict(existing.get("keyword_weights") or {})
         non_targets = set(existing.get("non_target_keywords") or ())
 
@@ -391,10 +393,12 @@ def apply(keywords: List[str], proposal: Optional[dict] = None) -> None:
         fields["keyword_weights"] = {k: v for k, v in weights.items() if k in final}
         fields["non_target_keywords"] = [k for k in final if k in non_targets]
 
-    repo.save_brand_kit(**fields)
+    repo.save_brand_kit(kit_id, **fields)
 
 
-def apply_and_measure(keywords: List[str], proposal: Optional[dict] = None) -> dict:
+def apply_and_measure(
+    keywords: List[str], proposal: Optional[dict] = None, kit_id: Optional[int] = None
+) -> dict:
     """Apply the pool and leave every keyword in it freshly measured.
 
     The two used to be separate chores and the second one had no prompt: a
@@ -407,8 +411,8 @@ def apply_and_measure(keywords: List[str], proposal: Optional[dict] = None) -> d
     Returns what it spent so the screen can say so rather than the marketer
     discovering it in the quota counter.
     """
-    apply(keywords, proposal)
-    pool = repo.get_brand_kit().get("seo_keywords") or []
+    apply(keywords, proposal, kit_id)
+    pool = repo.get_brand_kit(kit_id).get("seo_keywords") or []
     before = repo.naver_calls_today()
     # use_cache=True: 방금 조사에서 캐시에 들어간 후보는 다시 사지 않습니다.
     keyword_research.rank_keywords(pool, use_cache=True, include_trend=False)
@@ -476,7 +480,9 @@ CATEGORY_JUDGE_SYSTEM_PROMPT = (
 )
 
 
-def suggest_category_seeds(category: str, vendor: Optional[str] = None) -> List[str]:
+def suggest_category_seeds(
+    category: str, vendor: Optional[str] = None, kit_id: Optional[int] = None
+) -> List[str]:
     """Seeds for one business line, phrased the way its customers search.
 
     The person typing '교육' is naming a part of their business, not a search
@@ -485,7 +491,7 @@ def suggest_category_seeds(category: str, vendor: Optional[str] = None) -> List[
     """
     raw = generate_text(
         vendor=vendor or get_configured_vendor(),
-        prompt=f"{_brand_context()}\n\n추가할 사업 분야: {category}",
+        prompt=f"{_brand_context(kit_id)}\n\n추가할 사업 분야: {category}",
         system=CATEGORY_SEED_SYSTEM_PROMPT,
         max_tokens=500,
         note="keyword-category-seeds",
@@ -495,7 +501,8 @@ def suggest_category_seeds(category: str, vendor: Optional[str] = None) -> List[
 
 
 def find_category_candidates(
-    category: str, *, current: Optional[List[str]] = None, vendor: Optional[str] = None
+    category: str, *, current: Optional[List[str]] = None, vendor: Optional[str] = None,
+    kit_id: Optional[int] = None,
 ) -> dict:
     """Free stage: seeds → related keywords → keep only this category's.
 
@@ -506,7 +513,7 @@ def find_category_candidates(
     """
     category = category.strip()
     current = current or []
-    seeds = suggest_category_seeds(category, vendor=vendor)
+    seeds = suggest_category_seeds(category, vendor=vendor, kit_id=kit_id)
     if not seeds:
         raise RuntimeError("이 분야의 씨앗 키워드를 만들지 못했습니다. 분야 이름을 조금 더 구체적으로 적어보세요.")
 
@@ -522,7 +529,7 @@ def find_category_candidates(
 
     lines = "\n".join(f"- {r['keyword']} ({r['volume']})" for r in offered)
     prompt = (
-        f"{_brand_context()}\n\n"
+        f"{_brand_context(kit_id)}\n\n"
         f"추가하려는 사업 분야: {category}\n"
         f"이미 쓰고 있는 SEO 키워드(후보 아님): {', '.join(current) if current else '(없음)'}\n\n"
         f"키워드 후보 (괄호 안은 월검색량):\n{lines}"

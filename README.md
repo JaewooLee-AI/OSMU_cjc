@@ -24,14 +24,18 @@ Windows용 .exe는 GitHub Actions(`.github/workflows/flet-windows-build.yml`)가
 
 ### 자동 배포 (설치 파일 받기)
 
-`main`에 앱 코드(`flet_app/`, `core/`, `ai_workers/`)가 바뀐 커밋을 푸시하면 Actions가 Windows 앱을 빌드해
-**GitHub Releases**에 `OSMU-cjc-windows-v0.1.N.zip`으로 자동 게시합니다.
-담당자는 항상 아래 주소에서 최신 버전을 받아 zip을 풀고 `.exe`를 실행하면 됩니다.
+`main`에 앱 코드(`flet_app/`, `core/`, `ai_workers/`, `installer/`)가 바뀐 커밋을 푸시하면 Actions가 Windows 앱을 빌드하고
+설치 프로그램(Inno Setup, `installer/osmu-cjc.iss`)으로 묶어 **GitHub Releases**에 `OSMU-CJC-Setup-v0.1.N.zip`으로 자동 게시합니다.
+zip 안에는 `OSMU-CJC-Setup-0.1.N.exe` 하나만 있습니다(카카오톡으로 .exe를 직접 보내면 막히기 때문).
+담당자는 아래 주소에서 받아 압축을 풀고 setup.exe를 실행하면 `C:\Program Files\OSMU CJC`에 설치되고
+바탕화면·시작 메뉴에 아이콘이 생깁니다. 업데이트도 새 setup.exe를 실행하면 같은 자리에 덮어씁니다.
 
 https://github.com/JaewooLee-AI/OSMU_cjc/releases/latest
 
 코드 변경 없이 다시 빌드하려면 GitHub의 Actions 탭 → `flet-windows-build` → **Run workflow**를 누르세요.
-사용자 데이터(DB·API 키)는 `%APPDATA%\OSMU_CJC`에 있어 새 버전으로 바꿔도 그대로 유지됩니다.
+사용자 데이터(DB·API 키)는 `%APPDATA%\OSMU_CJC`에 있어 재설치·업데이트·제거해도 그대로 유지됩니다.
+워크플로는 매 빌드마다 러너에서 설치 → 재설치 → 제거를 실제로 돌려, 옛 파일 정리·아이콘·'설치된 앱' 항목·사용자 데이터 보존을 확인합니다.
+서명 인증서가 없어 처음 실행할 때 SmartScreen 경고가 뜨면 [추가 정보] → [실행]을 누릅니다.
 
 첫 실행 시 `data/osmu.db`가 만들어지고, `company_info/`에서 정리한 브랜드 킷이 자동으로 채워집니다.
 그다음 **⚙️ 설정 → LLM 벤더**에서 API 키를 하나 이상 등록하고 [기본 생성 모델]을 지정하면 바로 사용할 수 있습니다.
@@ -66,8 +70,8 @@ https://github.com/JaewooLee-AI/OSMU_cjc/releases/latest
 |---|---|
 | 📊 대시보드 | 상태별 칸반, 저장소 사용량, 누적 절약 토큰 |
 | ✍️ 워크벤치 | 좌: 메모·사진·본문 편집 / 우: 4채널 시뮬레이터 (OSMU_web 2분할 화면 이식) |
-| 📰 뉴스 큐레이션 | 브랜드 키워드로 Google/네이버 뉴스 검색 → 워크벤치로 전달 |
-| 🧵 브랜드 킷 | 페르소나·톤앤매너·핵심 팩트·용어집·SEO 키워드·금기어 사전 |
+| 📰 뉴스 큐레이션 | 고른 킷의 키워드로 Google/네이버 뉴스 검색 → 워크벤치로 전달 |
+| 🧵 브랜드 킷 | 킷 목록(추가·복제·삭제) · 킷별 페르소나·톤앤매너·핵심 팩트·용어집·SEO 키워드 · 회사 공통 금기어 사전 |
 | 🚀 네이버 게시 | 로그인 세션 저장, 스마트에디터 반자동 입력 |
 | ⚙️ 설정 · 토큰 | LLM 벤더 등록, 이미지 분석 토큰 정책, 사용량 리포트 |
 
@@ -154,8 +158,13 @@ https://github.com/JaewooLee-AI/OSMU_cjc/releases/latest
 
 ## 브랜드 킷
 
-`company_info/`의 회사 문서에서 뽑아 첫 실행 시 자동으로 채워집니다 (`core/brand_seed.py`).
+`company_info/`의 회사 문서에서 뽑아 첫 실행 시 '기본' 킷으로 자동으로 채워집니다 (`core/brand_seed.py`).
 빈 칸에서 시작하지 않으므로 **첫 초안부터** 제품명·가격대·인증·화법을 알고 씁니다.
+
+킷은 사업 분야별로 여러 개 둘 수 있습니다(가발 판매·관리 / 창업 교육 / 두피·항암 등, 개수 제한 없음).
+새 킷은 '기본' 킷을 복사해서 만들고, 글마다 워크벤치에서 어느 킷으로 쓸지 고릅니다.
+킷마다 따로 두는 값은 업종·페르소나·톤앤매너·핵심 팩트·용어집·SEO 키워드·기본 콘텐츠 모드·샘플이고,
+블로그·인스타 계정과 금기어 사전·가드레일은 회사 공통입니다(의료법·표시광고법 기준은 회사 전체에 해당).
 
 - 핵심 팩트 15개 (2014년 대한가발협회 주축 설립, ATUM 24개 센서·10분 스캔, 7~10일 배송, KOTITI 수치 등)
 - 용어집 14개 (키노피스 / ATUM 3D 두상측정기 / 맞춤가발 / 항암가발 / 가발공장OEM …)

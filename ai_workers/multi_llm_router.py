@@ -51,11 +51,10 @@ def vision_capable_vendors() -> list:
 
 def get_configured_vendor() -> str:
     """The single vendor the admin chose for writing/auditing content
-    (Settings page -> brand_kit.default_generation_vendor). Every pipeline
+    (Settings page -> app_settings.default_generation_vendor). Every pipeline
     calls this instead of hardcoding a vendor, so switching models is a
     one-click admin action with no silent fallback to an unintended model."""
-    brand_kit = repo.get_brand_kit()
-    vendor = brand_kit.get("default_generation_vendor")
+    vendor = repo.get_app_settings().get("default_generation_vendor")
     if not vendor:
         raise RuntimeError("기본 생성 모델이 지정되지 않았습니다. ⚙️ 설정 페이지에서 먼저 지정하세요.")
 
@@ -70,8 +69,7 @@ def get_vision_vendor() -> str:
     that separation is itself a cost lever, since captioning is a small,
     high-volume task while drafting is a large, low-volume one. Falls back to
     the generation vendor when the admin hasn't picked one."""
-    brand_kit = repo.get_brand_kit()
-    vendor = brand_kit.get("vision_vendor")
+    vendor = repo.get_app_settings().get("vision_vendor")
     if vendor:
         setting = repo.get_llm_setting(vendor)
         if setting and setting.get("is_active"):

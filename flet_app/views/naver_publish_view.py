@@ -31,6 +31,7 @@ from ai_workers.sns_validator import TWEET_HARD_MAX, x_weighted_length
 from core import repo
 
 from flet_app.components.collapsible import collapsible
+from flet_app.kit_picker import kit_label
 from flet_app.state import AppState
 from flet_app.theme import BRAND_COLORS, fs
 from flet_app.views.workbench_view import _copy_field
@@ -245,6 +246,10 @@ def _build_card(
         card_children.append(ft.Text(
             f"게시: {campaign.get('updated_at', '')}", size=fs(11, scale), color=BRAND_COLORS["text_muted"],
         ))
+    card_children.append(ft.Text(
+        f"🧵 브랜드 킷: {kit_label(campaign.get('brand_kit_id'), campaign.get('brand_kit_name'))}",
+        size=fs(11, scale), color=BRAND_COLORS["text_muted"],
+    ))
     if campaign.get("source_url"):
         card_children.append(ft.Text(
             f"📰 원문: {campaign['source_url']}", size=fs(11, scale), color=BRAND_COLORS["text_muted"],
@@ -412,7 +417,8 @@ def _build_tabs(page: ft.Page, scale: float, brand_kit: dict, pending: list, pub
 
 def build(page: ft.Page, state: AppState) -> ft.Control:
     scale = state.font_scale
-    brand_kit = repo.get_brand_kit()
+    # 미리보기와 로그인에는 회사 공통 값(블로그·인스타 계정, 브랜드명)만 필요합니다.
+    brand_kit = repo.get_company_profile()
     naver_blog_id = (brand_kit.get("naver_blog_id") or "").strip()
 
     login_box = ft.Container()
