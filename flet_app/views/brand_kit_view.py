@@ -20,6 +20,7 @@ import flet as ft
 
 from ai_workers import content_mode, keyword_research
 from core import repo
+from core.brand_seed import KIT_PRESETS
 
 from flet_app.components.editable_table import ColumnSpec, EditableTable
 from flet_app.state import AppState
@@ -137,15 +138,72 @@ def _build_kit_list(page: ft.Page, state: AppState, render, scale: float, kits: 
 
     def on_new(e: ft.Event) -> None:
         base = kits[0]
-
-        def create(name: str) -> None:
-            select(repo.create_brand_kit(name, copy_from=base["id"]))
-            _snack(page, f"'{name.strip()}' 킷을 만들었습니다. 내용은 '{base['name']}' 킷을 복사한 것이니 이 분야에 맞게 고쳐주세요.")
-
-        _name_dialog(
-            page, "새 브랜드 킷", "", "만들기", create,
-            note=f"맨 위 '{base['name']}' 킷의 내용을 복사해서 시작합니다. 예: 가발 판매·관리 / 창업 교육 / 두피·항암",
+        template_dd = ft.Dropdown(
+            label="시작 템플릿 (분야별 분리 프리셋 권장)",
+            width=380,
+            value="wig_care",
+            options=[
+                ft.DropdownOption(key=pk, text=f"✨ 분야 프리셋: {p['name']} ({p['industry']})")
+                for pk, p in KIT_PRESETS.items()
+            ]
+            + [ft.DropdownOption(key="_copy", text=f"📄 '{base['name']}' 킷 그대로 복사")],
         )
+        name_field = ft.TextField(
+            label="킷 이름",
+            value=repo.unique_kit_name(KIT_PRESETS["wig_care"]["name"]),
+            autofocus=True,
+            width=380,
+        )
+        error = ft.Text("", color="#B3261E", size=12)
+
+        def on_template_change(ev: ft.Event) -> None:
+            chosen = template_dd.value
+            if chosen in KIT_PRESETS:
+                name_field.value = repo.unique_kit_name(KIT_PRESETS[chosen]["name"])
+                name_field.update()
+
+        template_dd.on_select = on_template_change
+
+        def submit(ev: ft.Event) -> None:
+            chosen = template_dd.value
+            pkey = chosen if chosen in KIT_PRESETS else None
+            try:
+                new_id = repo.create_brand_kit(name_field.value or "", copy_from=base["id"], preset_key=pkey)
+            except repo.BrandKitError as exc:
+                error.value = str(exc)
+                error.update()
+                return
+            page.pop_dialog()
+            select(new_id)
+            if pkey:
+                _snack(page, f"'{name_field.value.strip()}' 분야 전용 킷을 만들었습니다.")
+            else:
+                _snack(
+                    page,
+                    f"'{name_field.value.strip()}' 킷을 만들었습니다. 내용은 '{base['name']}' 킷을 복사한 것이니 이 분야에 맞게 고쳐주세요.",
+                )
+
+        name_field.on_submit = submit
+        page.show_dialog(ft.AlertDialog(
+            modal=True,
+            title=ft.Text("새 브랜드 킷"),
+            content=ft.Column(
+                [
+                    ft.Text(
+                        "사업 분야별로 페르소나·팩트·SEO 키워드가 분리된 프리셋으로 시작하거나, 기존 킷을 복사할 수 있습니다.",
+                        size=12, color=BRAND_COLORS["text_muted"],
+                    ),
+                    template_dd,
+                    name_field,
+                    error,
+                ],
+                tight=True, spacing=8, width=400,
+            ),
+            actions=[
+                ft.TextButton("취소", on_click=lambda ev: page.pop_dialog()),
+                ft.FilledButton("만들기", on_click=submit),
+            ],
+        ))
 
     def on_duplicate(kit: dict) -> None:
         def create(name: str) -> None:

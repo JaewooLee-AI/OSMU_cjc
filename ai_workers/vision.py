@@ -49,9 +49,11 @@ from PIL import Image
 
 from ai_workers.multi_llm_router import (
     GOOGLE_NO_ZERO_THINKING,
+    _REASONING_HEADROOM,
     anthropic_request_options,
     get_vision_vendor,
     google_client,
+    google_rejects_zero_thinking,
     load_vendor_config,
     raise_if_refused,
 )
@@ -212,22 +214,26 @@ def _call_google(model: str, api_key: str, images: List[bytes], max_tokens: int)
     # 3-image batches failed that way and had to be split and re-sent, which
     # meant paying the image tokens twice — 42% of a run's vision spend.
     config_kwargs = {"max_output_tokens": max_tokens}
-    if hasattr(types, "ThinkingConfig") and model not in GOOGLE_NO_ZERO_THINKING:
+    if model in GOOGLE_NO_ZERO_THINKING:
+        config_kwargs["max_output_tokens"] = max_tokens + _REASONING_HEADROOM
+    elif hasattr(types, "ThinkingConfig"):
         try:
             config_kwargs["thinking_config"] = types.ThinkingConfig(thinking_budget=0)
         except Exception:  # noqa: BLE001 — model without a tunable budget
-            pass
+            config_kwargs["max_output_tokens"] = max_tokens + _REASONING_HEADROOM
 
     try:
         res = client.models.generate_content(
             model=model, contents=parts, config=types.GenerateContentConfig(**config_kwargs)
         )
-    except Exception:
+    except Exception as exc:
         # Some Gemini models reject thinking_budget=0 outright; the caption is
-        # worth more than the optimisation, so fall back rather than fail.
-        if "thinking_config" not in config_kwargs:
+        # worth more than the optimisation, so fall back rather than fail —
+        # but only for that rejection, and add headroom for thoughts.
+        if "thinking_config" not in config_kwargs or not google_rejects_zero_thinking(exc):
             raise
         config_kwargs.pop("thinking_config")
+        config_kwargs["max_output_tokens"] = max_tokens + _REASONING_HEADROOM
         res = client.models.generate_content(
             model=model, contents=parts, config=types.GenerateContentConfig(**config_kwargs)
         )
@@ -420,9 +426,12 @@ def describe_images(
         # complete items to look successful. Claude counts its thinking in
         # output_tokens, so it is measured against the ceiling actually sent
         # (with the thinking allowance), not the caption budget alone.
-        ceiling = (
-            anthropic_request_options(model_name, max_tokens)["max_tokens"] if vendor == "anthropic" else max_tokens
-        )
+        if vendor == "anthropic":
+            ceiling = anthropic_request_options(model_name, max_tokens)["max_tokens"]
+        elif vendor == "google" and model_name in GOOGLE_NO_ZERO_THINKING:
+            ceiling = max_tokens + _REASONING_HEADROOM
+        else:
+            ceiling = max_tokens
         truncated = used_out >= ceiling - 8
 
         repo.log_usage(

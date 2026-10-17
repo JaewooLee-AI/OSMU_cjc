@@ -284,11 +284,27 @@ def unique_kit_name(base: str) -> str:
     return f"{base} {n}"
 
 
-def create_brand_kit(name: str, copy_from: Optional[int] = None) -> int:
-    """새 킷을 만들고 ID를 돌려줍니다. 내용은 `copy_from` 킷(None이면 기본 킷)을 그대로 복사합니다."""
+def create_brand_kit(
+    name: str,
+    copy_from: Optional[int] = None,
+    preset_key: Optional[str] = None,
+) -> int:
+    """새 킷을 만들고 ID를 돌려줍니다.
+    `preset_key`를 주면 분야별 프리셋(core.brand_seed.KIT_PRESETS)으로 채우고,
+    아니면 `copy_from` 킷(None이면 기본 킷)을 그대로 복사합니다."""
     cleaned = _clean_kit_name(name)
     source = _get_kit_row(copy_from) or {}
     values = {k: source.get(k) for k in _KIT_COPY_FIELDS if source.get(k) is not None}
+    if preset_key:
+        from core.brand_seed import KIT_PRESETS
+
+        preset = KIT_PRESETS.get(preset_key)
+        if preset:
+            values["keyword_weights"] = {}
+            values["non_target_keywords"] = []
+            for k in _KIT_COPY_FIELDS:
+                if k in preset:
+                    values[k] = preset[k]
     encoded = _encode(values, _BRAND_KIT_JSON_COLS, _BRAND_KIT_BOOL_COLS)
     cols = ["name", "sort_order", *encoded.keys()]
     with get_conn() as conn:
@@ -406,20 +422,29 @@ def get_campaign(campaign_id: str) -> Optional[Dict[str, Any]]:
     return _decode(row, _CAMPAIGN_JSON_COLS, _CAMPAIGN_BOOL_COLS)
 
 
-def recent_posts(exclude_id: Optional[str] = None, limit: int = 10) -> List[Dict[str, Any]]:
+def recent_posts(
+    exclude_id: Optional[str] = None,
+    limit: int = 10,
+    brand_kit_id: Optional[int] = None,
+) -> List[Dict[str, Any]]:
     """Title + body of the most recently touched campaigns that have a body,
     newest first — the history ai_workers/body_variety.py compares against.
-    Excludes the campaign being generated, which would match itself."""
+    Excludes the campaign being generated, which would match itself.
+    When `brand_kit_id` is passed, filters to posts written with that kit so
+    cross-domain opening/closing sentences aren't injected into the draft prompt."""
+    sql = """
+        select id, title, content from campaigns
+        where content is not null and trim(content) != '' and id != ?
+          and status != 'processing'
+    """
+    params: list[Any] = [exclude_id or ""]
+    if brand_kit_id is not None:
+        sql += " and brand_kit_id = ?"
+        params.append(brand_kit_id)
+    sql += " order by updated_at desc limit ?"
+    params.append(limit)
     with get_conn() as conn:
-        rows = conn.execute(
-            """
-            select id, title, content from campaigns
-            where content is not null and trim(content) != '' and id != ?
-              and status != 'processing'
-            order by updated_at desc limit ?
-            """,
-            (exclude_id or "", limit),
-        ).fetchall()
+        rows = conn.execute(sql, tuple(params)).fetchall()
     return [dict(r) for r in rows]
 
 

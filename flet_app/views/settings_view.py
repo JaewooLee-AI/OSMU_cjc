@@ -24,7 +24,12 @@ import flet as ft
 
 from ai_workers import keyword_curator, keyword_research, vision
 from ai_workers.content_writer import SNS_CHANNELS, enabled_channels
-from ai_workers.multi_llm_router import VENDORS, test_connection, vision_capable_vendors
+from ai_workers.multi_llm_router import (
+    VENDORS,
+    normalize_model_name,
+    test_connection,
+    vision_capable_vendors,
+)
 from core import repo
 from core.crypto_utils import decrypt_api_key, encrypt_api_key
 
@@ -152,7 +157,13 @@ def _build_font_scale_section(state: AppState, scale: float) -> ft.Control:
     )
 
 
-def _vendor_card(page: ft.Page, vendor_key: str, spec: dict, default_status: ft.Text, scale: float) -> ft.Control:
+def _vendor_card(
+    page: ft.Page,
+    vendor_key: str,
+    spec: dict,
+    on_vendor_change,
+    scale: float,
+) -> ft.Control:
     saved = repo.get_llm_setting(vendor_key)
 
     model_field = ft.TextField(
@@ -173,18 +184,6 @@ def _vendor_card(page: ft.Page, vendor_key: str, spec: dict, default_status: ft.
     status = ft.Text("", size=fs(12, scale))
     delete_button = ft.IconButton(icon=ft.Icons.DELETE_OUTLINE, visible=bool(saved))
 
-    def _refresh_default_status() -> None:
-        current = repo.get_app_settings().get("default_generation_vendor")
-        setting = repo.get_llm_setting(current) if current else None
-        if current and setting and setting.get("is_active"):
-            cur_spec = VENDORS[current]
-            default_status.value = f"{cur_spec['icon']} {cur_spec['label']} ({setting['model_name']}) 사용 중"
-            default_status.color = "#1B6E3C"
-        else:
-            default_status.value = "아직 기본 생성 모델이 없습니다. 벤더 카드에서 [연결 테스트 · 저장]을 누르세요."
-            default_status.color = "#B3261E"
-        default_status.update()
-
     def on_test(e: ft.Event) -> None:
         nonlocal saved
         key_to_test = key_field.value or ""
@@ -199,6 +198,11 @@ def _vendor_card(page: ft.Page, vendor_key: str, spec: dict, default_status: ft.
             status.update()
             return
 
+        normalized_model = normalize_model_name(vendor_key, model_field.value)
+        if normalized_model != model_field.value:
+            model_field.value = normalized_model
+            model_field.update()
+
         test_button.disabled = True
         test_button.update()
         status.value = "⏳ 연결 테스트 중…"
@@ -212,30 +216,37 @@ def _vendor_card(page: ft.Page, vendor_key: str, spec: dict, default_status: ft.
             # 암호화 키 문제 등) run_thread 스레드가 조용히 죽어서 버튼이
             # "⏳ 연결 테스트 중…" 상태로 영원히 멈춘 것처럼 남았다.
             try:
-                ok, message = test_connection(vendor_key, model_field.value, key_to_test)
+                ok, message = test_connection(vendor_key, normalized_model, key_to_test)
                 if not ok:
                     status.value = f"❌ {message}"
                     status.color = "#B3261E"
                     return
 
                 encrypted = saved["encrypted_api_key"] if reuse_saved else encrypt_api_key(key_to_test)
-                repo.upsert_llm_setting(vendor_key, model_field.value, encrypted)
-                # 연결이 확인된 벤더를 그 자리에서 바로 기본 생성 모델로 지정합니다 —
-                # 등록과 "기본으로 지정"이 별개 단계이면 소상공인 고객이 두 번째 단계를
-                # 빠뜨리고 글쓰기 시점에야 원인을 알기 어려운 오류를 봅니다.
-                repo.save_app_settings(default_generation_vendor=vendor_key)
+                repo.upsert_llm_setting(vendor_key, normalized_model, encrypted)
+                # 아직 활성화된 기본 생성 모델이 없을 때만 자동으로 기본 지정합니다.
+                # 이미 다른 벤더(예: 글 생성용 Claude)가 기본으로 지정돼 있는데
+                # 이미지 분석용 Gemini를 추가로 등록했다고 기본 생성 모델이 덮어써지면 안 됩니다.
+                cur_default = repo.get_app_settings().get("default_generation_vendor")
+                cur_default_setting = repo.get_llm_setting(cur_default) if cur_default else None
+                auto_set_default = not (cur_default and cur_default_setting and cur_default_setting.get("is_active"))
+                if auto_set_default:
+                    repo.save_app_settings(default_generation_vendor=vendor_key)
 
                 saved = repo.get_llm_setting(vendor_key)
                 badge.value = _saved_badge(saved["encrypted_api_key"], saved.get("updated_at"))
                 badge.visible = True
                 delete_button.visible = True
                 key_field.value = ""
-                status.value = f"✅ {message} · 기본 생성 모델로 지정했습니다."
+                if auto_set_default or cur_default == vendor_key:
+                    status.value = f"✅ {message} · 기본 생성 모델로 지정됨"
+                else:
+                    status.value = f"✅ {message} · 저장됨 (기본 생성 모델 변경은 아래에서 선택)"
                 status.color = "#1B6E3C"
                 badge.update()
                 delete_button.update()
                 key_field.update()
-                _refresh_default_status()
+                on_vendor_change()
             except Exception as exc:  # noqa: BLE001 — run_thread로 돌리므로 여기서 안 잡으면 조용히 사라진다
                 status.value = f"❌ {exc}"
                 status.color = "#B3261E"
@@ -264,7 +275,7 @@ def _vendor_card(page: ft.Page, vendor_key: str, spec: dict, default_status: ft.
         status.update()
         badge.update()
         delete_button.update()
-        _refresh_default_status()
+        on_vendor_change()
 
     test_button = ft.FilledButton("연결 테스트 · 저장", on_click=on_test, expand=True)
     delete_button.on_click = on_delete
@@ -293,21 +304,58 @@ def _vendor_card(page: ft.Page, vendor_key: str, spec: dict, default_status: ft.
     )
 
 
-def _build_llm_tab(page: ft.Page, scale: float) -> ft.Control:
+def _build_llm_tab(page: ft.Page, scale: float, on_vendor_list_changed=None) -> ft.Control:
     default_status = ft.Text("", size=fs(13, scale))
+    default_dropdown = ft.Dropdown(label="기본 생성 모델 (글 작성·검수)", width=360)
 
-    current = repo.get_app_settings().get("default_generation_vendor")
-    setting = repo.get_llm_setting(current) if current else None
-    if current and setting and setting.get("is_active"):
-        cur_spec = VENDORS[current]
-        default_status.value = f"{cur_spec['icon']} {cur_spec['label']} ({setting['model_name']}) 사용 중"
-        default_status.color = "#1B6E3C"
-    else:
-        default_status.value = "아직 기본 생성 모델이 없습니다. 아래 카드에서 [연결 테스트 · 저장]을 누르면 그 벤더가 바로 기본으로 지정됩니다."
-        default_status.color = "#B3261E"
+    def _sync_default_controls(live: bool = False) -> None:
+        active_vendors = [
+            (k, repo.get_llm_setting(k))
+            for k in VENDORS
+            if (repo.get_llm_setting(k) or {}).get("is_active")
+        ]
+        default_dropdown.options = [
+            ft.DropdownOption(
+                key=k,
+                text=f"{VENDORS[k]['icon']} {VENDORS[k]['label']} ({s['model_name']})",
+            )
+            for k, s in active_vendors
+        ]
+        current = repo.get_app_settings().get("default_generation_vendor")
+        setting = repo.get_llm_setting(current) if current else None
+        if current and setting and setting.get("is_active"):
+            cur_spec = VENDORS[current]
+            default_dropdown.value = current
+            default_dropdown.disabled = False
+            default_status.value = f"{cur_spec['icon']} {cur_spec['label']} ({setting['model_name']}) 사용 중"
+            default_status.color = "#1B6E3C"
+        else:
+            default_dropdown.value = None
+            default_dropdown.disabled = not active_vendors
+            default_status.value = (
+                "아직 기본 생성 모델이 없습니다. 아래 카드에서 [연결 테스트 · 저장]을 누르면 등록됩니다."
+            )
+            default_status.color = "#B3261E"
+        if live:
+            default_dropdown.update()
+            default_status.update()
+
+    def on_default_select(e: ft.Event) -> None:
+        if default_dropdown.value:
+            repo.save_app_settings(default_generation_vendor=default_dropdown.value)
+            _sync_default_controls(live=True)
+
+    default_dropdown.on_select = on_default_select
+
+    def _on_vendor_change() -> None:
+        _sync_default_controls(live=True)
+        if on_vendor_list_changed:
+            on_vendor_list_changed()
+
+    _sync_default_controls(live=False)
 
     cards = ft.Row(
-        [_vendor_card(page, k, spec, default_status, scale) for k, spec in VENDORS.items()],
+        [_vendor_card(page, k, spec, _on_vendor_change, scale) for k, spec in VENDORS.items()],
         spacing=12,
     )
 
@@ -322,16 +370,12 @@ def _build_llm_tab(page: ft.Page, scale: float) -> ft.Control:
             ft.Divider(),
             ft.Text("기본 생성 모델", weight=ft.FontWeight.BOLD, size=fs(14, scale)),
             ft.Text(
-                "블로그 초안, 컴플라이언스 감사, SEO 재조정, 채널별 카피에 실제로 사용할 모델입니다.",
+                "블로그 초안, 컴플라이언스 감사, SEO 재조정, 채널별 카피에 실제로 사용할 모델입니다. "
+                "이미지 분석 모델을 별도로 쓰려면 [🖼️ 이미지 분석 (토큰)] 탭에서 이미지 분석 벤더를 고르세요.",
                 size=fs(12, scale),
                 color=BRAND_COLORS["text_muted"],
             ),
-            default_status,
-            ft.Text(
-                "다른 벤더로 바꾸려면, 그 벤더 카드에서 [연결 테스트 · 저장]을 다시 누르세요.",
-                size=fs(11, scale),
-                color=BRAND_COLORS["text_muted"],
-            ),
+            ft.Row([default_dropdown, default_status], spacing=12),
         ],
         spacing=10,
         scroll=ft.ScrollMode.AUTO,
@@ -1596,6 +1640,12 @@ def _build_channels_tab(scale: float) -> ft.Control:
 
 def build(page: ft.Page, state: AppState) -> ft.Control:
     scale = state.font_scale
+    vision_box = ft.Container(content=_build_vision_tab(scale), padding=10)
+
+    def refresh_vision_tab() -> None:
+        vision_box.content = _build_vision_tab(scale)
+        vision_box.update()
+
     return ft.Column(
         [
             ft.Text("설정 · 토큰", size=fs(24, scale), weight=ft.FontWeight.BOLD),
@@ -1618,10 +1668,10 @@ def build(page: ft.Page, state: AppState) -> ft.Control:
                         ft.TabBarView(
                             expand=True,
                             controls=[
-                                ft.Container(content=_build_llm_tab(page, scale), padding=10),
+                                ft.Container(content=_build_llm_tab(page, scale, refresh_vision_tab), padding=10),
                                 ft.Container(content=_build_channels_tab(scale), padding=10),
                                 ft.Container(content=_build_naver_tab(page, scale), padding=10),
-                                ft.Container(content=_build_vision_tab(scale), padding=10),
+                                vision_box,
                                 ft.Container(content=_build_usage_tab(scale), padding=10),
                             ],
                         ),

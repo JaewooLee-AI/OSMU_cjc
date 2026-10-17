@@ -22,7 +22,7 @@ VENDORS = {
     "google": {
         "label": "Google Gemini",
         "icon": "✨",
-        "default_model": "gemini-2.5-flash",
+        "default_model": "gemini-3.8-flash",
         "supports_vision": True,
         "note": "이미지 분석 기본 벤더 — 이미지 토큰 단가가 가장 낮습니다.",
     },
@@ -35,7 +35,7 @@ VENDORS = {
     "anthropic": {
         "label": "Anthropic",
         "icon": "🧠",
-        "default_model": "claude-sonnet-5",
+        "default_model": "claude-sonnet-5-5",
         "supports_vision": True,
     },
 }
@@ -43,6 +43,16 @@ VENDORS = {
 # Korean averages roughly 2 characters per token across these tokenizers —
 # only used when a provider doesn't return usage metadata.
 _CHARS_PER_TOKEN = 2.0
+
+
+def normalize_model_name(vendor: str, model_name: str) -> str:
+    """Normalizes common user typos in provider model IDs (e.g. Anthropic uses
+    hyphens in version numbers like `claude-sonnet-5-5`, while users often type
+    `claude-sonnet-5.5` which returns a 404 from the Anthropic API)."""
+    cleaned = (model_name or "").strip()
+    if vendor == "anthropic":
+        cleaned = re.sub(r"(\d)\.(\d)", r"\1-\2", cleaned)
+    return cleaned
 
 
 def vision_capable_vendors() -> list:
@@ -79,6 +89,7 @@ def get_vision_vendor() -> str:
 
 def test_connection(vendor: str, model_name: str, api_key: str) -> Tuple[bool, str]:
     """Sends a minimal 'Hello' prompt to verify the key/model combo works."""
+    model_name = normalize_model_name(vendor, model_name)
     try:
         if vendor == "openai":
             from openai import OpenAI
@@ -116,7 +127,7 @@ def load_vendor_config(vendor: str) -> Tuple[str, str]:
     if not setting:
         raise RuntimeError(f"'{vendor}' 벤더의 설정이 없습니다. ⚙️ 설정 페이지에서 먼저 등록하세요.")
     api_key = decrypt_api_key(setting["encrypted_api_key"])
-    return setting["model_name"], api_key
+    return normalize_model_name(vendor, setting["model_name"]), api_key
 
 
 def _estimate_tokens(text: str) -> int:

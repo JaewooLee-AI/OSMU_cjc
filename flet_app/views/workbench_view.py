@@ -184,7 +184,19 @@ def build(page: ft.Page, state: AppState) -> ft.Control:
                 sim_box.content = _build_sim_panel(campaign_id, scale, sim_state, refresh_sim)
                 sim_box.update()
 
-            content_box.content = _build_campaign_editor(page, campaign_id, scale, reload, refresh_sim)
+            def refresh_selector_label() -> None:
+                updated_camp = repo.get_campaign(campaign_id)
+                if not updated_camp:
+                    return
+                for opt in selector.options or []:
+                    if opt.key == campaign_id:
+                        opt.text = _label(updated_camp)
+                        break
+                selector.update()
+
+            content_box.content = _build_campaign_editor(
+                page, campaign_id, scale, reload, refresh_sim, refresh_selector_label
+            )
             sim_box.content = _build_sim_panel(campaign_id, scale, sim_state, refresh_sim)
         if live:
             content_box.update()
@@ -254,7 +266,14 @@ def build(page: ft.Page, state: AppState) -> ft.Control:
     )
 
 
-def _build_campaign_editor(page: ft.Page, campaign_id: str, scale: float, reload, refresh_sim) -> ft.Control:
+def _build_campaign_editor(
+    page: ft.Page,
+    campaign_id: str,
+    scale: float,
+    reload,
+    refresh_sim,
+    refresh_selector_label=None,
+) -> ft.Control:
     campaign = repo.get_campaign(campaign_id)
     if not campaign:
         return ft.Text("이 콘텐츠를 찾을 수 없습니다.", color="#B3261E")
@@ -273,12 +292,41 @@ def _build_campaign_editor(page: ft.Page, campaign_id: str, scale: float, reload
     # 글마다 고릅니다. 킷을 잘못 고르면 다른 사업 분야의 페르소나·팩트·키워드로 쓰여
     # 내용이 섞이므로, 메모의 주제에 맞는 킷을 고르게 안내합니다.
     kit_notice = ft.Text("", size=fs(11, scale), color="#8A6D3B", visible=False)
+    mode_keys = content_mode.ORDER
+    brand_default = content_mode.resolve(None, brand_kit)
+    current_mode = campaign.get("content_mode")
+
+    def _mode_radios(default_key: str) -> list[ft.Control]:
+        return [
+            ft.Radio(
+                value=k,
+                label=f"{content_mode.MODES[k]['icon']} {content_mode.MODES[k]['label']}"
+                + (" (기본)" if k == default_key else ""),
+            )
+            for k in mode_keys
+        ]
+
+    mode_group = ft.RadioGroup(
+        value=current_mode if current_mode in mode_keys else brand_default["key"],
+        content=ft.Row(_mode_radios(brand_default["key"])),
+    )
+    mode_caption = ft.Text(
+        content_mode.describe(mode_group.value), size=fs(11, scale), color=BRAND_COLORS["text_muted"],
+    )
 
     def on_kit(new_id: int) -> None:
         if new_id == current_kit[0]:
             return
         current_kit[0] = new_id
         repo.set_campaign_brand_kit(campaign_id, new_id)
+        new_kit = repo.get_brand_kit(new_id)
+        new_default = content_mode.resolve(None, new_kit)["key"]
+        mode_group.content = ft.Row(_mode_radios(new_default))
+        if not (campaign.get("content") or "").strip() and not campaign.get("content_mode"):
+            mode_group.value = new_default
+            mode_caption.value = content_mode.describe(new_default)
+            mode_caption.update()
+        mode_group.update()
         if (campaign.get("content") or "").strip():
             kit_notice.value = (
                 "킷을 바꿨습니다. 지금 보이는 초안은 이전 킷으로 쓴 것이라, 새 킷을 반영하려면 "
@@ -288,6 +336,8 @@ def _build_campaign_editor(page: ft.Page, campaign_id: str, scale: float, reload
             kit_notice.value = "킷을 바꿨습니다. 초안을 생성할 때 이 킷을 씁니다."
         kit_notice.visible = True
         kit_notice.update()
+        if refresh_selector_label:
+            refresh_selector_label()
         refresh_sim()
 
     controls.append(ft.Row([
@@ -346,24 +396,6 @@ def _build_campaign_editor(page: ft.Page, campaign_id: str, scale: float, reload
         controls += collapsible(label, body, initially_open=bool(filled_n))
 
     # --- 콘텐츠 모드 -----------------------------------------------------------
-    brand_default = content_mode.resolve(None, brand_kit)
-    mode_keys = content_mode.ORDER
-    current_mode = campaign.get("content_mode")
-    mode_group = ft.RadioGroup(
-        value=current_mode if current_mode in mode_keys else brand_default["key"],
-        content=ft.Row([
-            ft.Radio(
-                value=k,
-                label=f"{content_mode.MODES[k]['icon']} {content_mode.MODES[k]['label']}"
-                + (" (기본)" if k == brand_default["key"] else ""),
-            )
-            for k in mode_keys
-        ]),
-    )
-    mode_caption = ft.Text(
-        content_mode.describe(mode_group.value), size=fs(11, scale), color=BRAND_COLORS["text_muted"],
-    )
-
     def on_mode_change(e: ft.Event) -> None:
         mode_caption.value = content_mode.describe(mode_group.value)
         mode_caption.update()

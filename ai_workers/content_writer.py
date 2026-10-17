@@ -556,6 +556,11 @@ def run_pipeline(campaign_id: str, progress: Progress = None) -> Dict:
         # again after the quality pass to measure how far this one landed
         # from them — see ai_workers/body_variety.py.
         post_history = repo.recent_posts(exclude_id=campaign_id, limit=body_variety.HISTORY_LIMIT)
+        kit_post_history = repo.recent_posts(
+            exclude_id=campaign_id,
+            limit=body_variety.HISTORY_LIMIT,
+            brand_kit_id=brand_kit.get("id"),
+        )
         seed_blocks = []
         if is_news and article_text:
             seed_blocks.append(f"[뉴스 원문]\n{article_text[:3000]}")
@@ -584,7 +589,7 @@ def run_pipeline(campaign_id: str, progress: Progress = None) -> Dict:
                 + photo_context(captions),
                 photo_instruction(captions),
             ]
-            + recent_posts_block(body_variety.prompt_history(post_history))
+            + recent_posts_block(body_variety.prompt_history(kit_post_history))
             + [
             ]
             + (
