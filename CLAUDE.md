@@ -45,12 +45,14 @@ python flet_app/main.py
 
 `core/db.py`의 `_default_data_dir`이 정합니다 (`.env`의 `OSMU_DATA_DIR`이 있으면 그것이 우선).
 
-1. 저장소 루트(`PROJECT_ROOT`)에 `data/`가 이미 있으면 그 폴더
-2. 없으면 사용자별 폴더 — Windows `%APPDATA%\OSMU_CJC`, macOS `~/Library/Application Support/OSMU_CJC`,
+1. 소스에서 실행(`python flet_app/main.py`)하고 저장소 루트(`PROJECT_ROOT`)에 `data/`가 이미 있으면 그 폴더
+2. 그 밖에는 사용자별 폴더 — Windows `%APPDATA%\OSMU_CJC`, macOS `~/Library/Application Support/OSMU_CJC`,
    그 밖 `~/.local/share/OSMU_CJC`
 
 안에는 `osmu.db`(SQLite), `assets/`(사진), `.master_key`(API 키 암호화 키), `naver_state.json`(네이버 로그인 세션)이 있습니다.
-배포된 앱 사용자의 데이터는 `%APPDATA%\OSMU_CJC`에 있으며, 새 버전 설치·재설치로 지워지면 안 됩니다.
+패키징된 exe(Flet이 `FLET_APP_STORAGE_DATA`를 넣어 줌)는 `PROJECT_ROOT/data`를 **절대 쓰지 않습니다** — 설치형의 `PROJECT_ROOT`는
+`C:\Program Files\OSMU CJC\app`(쓰기 금지, 재설치 때 비워짐)입니다. 배포된 앱 사용자의 데이터는 `%APPDATA%\OSMU_CJC`에 있으며,
+새 버전 설치·재설치·제거로 지워지면 안 됩니다. 앱이 설치 폴더에 파일을 쓰는 코드를 넣지 않습니다(로그·캐시·임시 파일은 데이터 폴더나 임시 폴더로).
 
 DB 스키마를 바꿀 때는 `core/db.py`의 기존 방식(앱 시작 시 한 번 실행되는 마이그레이션 — 컬럼 추가는 `_ADDED_COLUMNS`,
 테이블을 다시 만들어야 하면 `_migrate_single_brand_kit`처럼 한 트랜잭션으로)을 따르고,
@@ -92,6 +94,11 @@ DB 스키마를 바꿀 때는 `core/db.py`의 기존 방식(앱 시작 시 한 �
 
 - `.github/workflows/flet-windows-build.yml`이 `stage/`에 `core/`·`ai_workers/`·`flet_app/`를 나란히 복사하고
   `flet build windows stage`로 빌드합니다(`flet build`는 앱 경로 안의 파일만 묶기 때문).
+- 빌드 결과는 Inno Setup(`installer/osmu-cjc.iss`)으로 `OSMU-CJC-Setup-{버전}.exe`를 만들고, 그 setup.exe 하나를 zip으로 감싸
+  Release에 올립니다(카카오톡 전달용). **`AppId` GUID는 절대 바꾸지 않습니다** — 바꾸면 재설치가 기존 설치를 덮지 못하고 두 번 설치됩니다.
+  워크플로가 러너에서 설치·재설치·제거를 실제로 돌려 확인합니다(앱 창 실행은 러너에서 불가 — 로컬 검증).
+- 앱·바로가기·설치 프로그램 아이콘은 `flet_app/assets/icon.png`(씨제이씨 로고, 투명 배경 512×512) 하나에서 만듭니다.
+  `flet build`가 exe 아이콘으로 쓰고, 워크플로가 같은 파일로 설치 프로그램용 `.ico`를 만듭니다.
 - flet은 `1.0.2`로 고정합니다. 올릴 때는 flet·flet-cli·flet-desktop이 모두 같은 버전으로 PyPI에 올라와 있는지 확인합니다.
 - **`flet_app/pyproject.toml`의 `jni_flutter = "1.0.3"` 고정을 유지합니다.** 1.0.4 이상은 flet 1.0.2 템플릿(jni 1.0.0)과
   맞지 않아 Dart 컴파일이 "Constant evaluation error"로 깨집니다. flet을 jni 1.1을 쓰는 버전으로 올릴 때만 이 고정을 같이 풉니다.

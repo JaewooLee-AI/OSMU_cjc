@@ -25,19 +25,29 @@ from pathlib import Path
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
 
+def _is_packaged_app() -> bool:
+    """`flet build`으로 만든 exe(설치형·zip)로 실행 중인지.
+
+    Flet 빌드 템플릿은 실행할 때 FLET_APP_STORAGE_DATA를 넣어 주고, 소스에서
+    `python flet_app/main.py`로 띄우면 이 값이 없습니다.
+    """
+    return bool(os.environ.get("FLET_APP_STORAGE_DATA"))
+
+
 def _default_data_dir() -> Path:
     """Where data/ lives when OSMU_DATA_DIR isn't set.
 
-    A packaged desktop app's install location (e.g. Program Files) may not be
-    writable, so a fresh install needs a per-user OS data folder instead of
-    PROJECT_ROOT/data. But this repo also has a live Streamlit install whose
-    data/ already exists next to the project — for that install, switching
-    the default out from under it would make its data look like it vanished.
-    So: keep using PROJECT_ROOT/data if it's already there (existing installs
-    untouched), and only fall back to a per-user folder for a brand new one.
+    - 소스 저장소에서 실행하고 저장소 루트에 data/가 이미 있으면 그 폴더 (개발용).
+    - 그 밖에는 사용자별 폴더 (Windows `%APPDATA%\\OSMU_CJC`).
+
+    패키징된 앱은 PROJECT_ROOT/data를 절대 쓰지 않습니다. 설치형에서 PROJECT_ROOT는
+    `C:\\Program Files\\…\\app`(빌드가 앱 코드를 exe 옆 app 폴더에 둠)이라 쓰기가 막혀
+    있고, 재설치 때 설치 폴더를 통째로 비우므로 거기 둔 데이터는 지워집니다.
+    zip으로 배포하던 이전 버전도 app 폴더에 data/가 없어 사용자별 폴더를 썼으므로,
+    설치형으로 옮겨도 같은 데이터를 그대로 읽습니다.
     """
     existing = PROJECT_ROOT / "data"
-    if existing.exists():
+    if not _is_packaged_app() and existing.exists():
         return existing
 
     if sys.platform == "win32":

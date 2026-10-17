@@ -22,3 +22,7 @@ flet_app/build/
 .playwright-mcp/
 *.swp
 osmu-dashboard.png
+
+# 설치 프로그램 빌드 산출물 (워크플로가 flet_app/assets/icon.png에서 .ico를 만들고 dist/에 setup.exe를 만듭니다)
+installer/*.ico
+/dist/
