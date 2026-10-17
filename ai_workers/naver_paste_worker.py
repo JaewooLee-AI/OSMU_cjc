@@ -465,8 +465,7 @@ def _run(campaign_id: str, on_status: Callable[[str], None]) -> None:
         print(f"[naver_paste_worker] campaign {campaign_id} not found")
         return
 
-    brand_kit = repo.get_brand_kit()
-    blog_id = (brand_kit.get("naver_blog_id") or "").strip()
+    blog_id = (repo.get_company_profile().get("naver_blog_id") or "").strip()
     if not blog_id:
         message = "네이버 블로그 아이디가 없습니다. [브랜드 킷] 페이지에서 먼저 등록해주세요."
         repo.update_campaign(campaign_id, publish_error=message)

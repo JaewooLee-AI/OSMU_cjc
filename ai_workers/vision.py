@@ -328,11 +328,11 @@ def describe_images(
     if not rel_paths:
         return {}
 
-    brand_kit = repo.get_brand_kit()
-    if not brand_kit.get("vision_enabled", True):
+    settings = repo.get_app_settings()
+    if not settings.get("vision_enabled", True):
         return {p: "(이미지 분석 비활성화 — 담당자 메모만으로 배치합니다)" for p in rel_paths}
 
-    quality = quality or brand_kit.get("vision_quality") or DEFAULT_QUALITY
+    quality = quality or settings.get("vision_quality") or DEFAULT_QUALITY
     preset = QUALITY_PRESETS.get(quality, QUALITY_PRESETS[DEFAULT_QUALITY])
     vendor = vendor or get_vision_vendor()
     model_name, api_key = load_vendor_config(vendor)
@@ -487,8 +487,8 @@ def preview_cost(rel_paths: List[str], vendor: Optional[str] = None, quality: Op
     if not rel_paths:
         return {"images": 0, "cached": 0, "to_analyze": 0, "est_tokens": 0, "quality": quality}
 
-    brand_kit = repo.get_brand_kit()
-    quality = quality or brand_kit.get("vision_quality") or DEFAULT_QUALITY
+    settings = repo.get_app_settings()
+    quality = quality or settings.get("vision_quality") or DEFAULT_QUALITY
     preset = QUALITY_PRESETS.get(quality, QUALITY_PRESETS[DEFAULT_QUALITY])
     try:
         vendor = vendor or get_vision_vendor()

@@ -31,6 +31,7 @@ from core import repo, storage
 
 import flet_app.simulators as sim
 from flet_app.components.collapsible import collapsible
+from flet_app.kit_picker import kit_dropdown
 from flet_app.state import AppState
 from flet_app.theme import BRAND_COLORS, fs
 
@@ -53,7 +54,8 @@ def _status_box(text: str, scale: float, kind: str = "info") -> ft.Container:
 def _label(c: dict) -> str:
     icon = "📰" if c["source_type"] == "news" else "✍️"
     title = c.get("title") or c.get("source_title") or c.get("source_url") or "(제목 없음)"
-    return f"{icon} {title[:44]} · {c['status']}"
+    kit = f" · 🧵{c['brand_kit_name']}" if c.get("brand_kit_name") else ""
+    return f"{icon} {title[:40]}{kit} · {c['status']}"
 
 
 def _is_untouched_draft(c: dict) -> bool:
@@ -95,7 +97,7 @@ def _build_sim_panel(campaign_id: str, scale: float, sim_state: dict, refresh_si
     if not campaign:
         return ft.Text("작업할 콘텐츠를 선택하세요.", size=fs(12, scale), color=BRAND_COLORS["text_muted"])
 
-    brand_kit = repo.get_brand_kit()
+    brand_kit = repo.get_campaign_brand_kit(campaign)
     # 꺼진 채널은 미리보기에서도 뺍니다 (⚙️ 설정 → 📣 생성 채널). 네이버 블로그는 항상 있습니다.
     active = set(enabled_channels(brand_kit)) | {"naver"}
     if sim_state["channel"] not in active:
@@ -257,8 +259,46 @@ def _build_campaign_editor(page: ft.Page, campaign_id: str, scale: float, reload
     if not campaign:
         return ft.Text("이 콘텐츠를 찾을 수 없습니다.", color="#B3261E")
 
-    brand_kit = repo.get_brand_kit()
-    controls: list[ft.Control] = []
+    brand_kit = repo.get_campaign_brand_kit(campaign)
+    current_kit = [brand_kit.get("id")]
+    controls: list[ft.Control] = [
+        # 스크롤 영역의 첫 컨트롤(지금은 아래 브랜드 킷 선택)은 라벨이 위쪽에 잘린다 —
+        # 컨테이너에 top padding을 줘도 (Container(expand=True, padding=...) 안의 스크롤
+        # 가능한 Column이 그 padding을 반영하지 않는 것으로 라이브에서 확인됨) 그대로였다.
+        # 그래서 padding에 기대는 대신, 실제로 자리를 차지하는 빈 컨트롤을 맨 앞에 둔다.
+        ft.Container(height=4),
+    ]
+
+    # --- 브랜드 킷 ------------------------------------------------------------
+    # 글마다 고릅니다. 킷을 잘못 고르면 다른 사업 분야의 페르소나·팩트·키워드로 쓰여
+    # 내용이 섞이므로, 메모의 주제에 맞는 킷을 고르게 안내합니다.
+    kit_notice = ft.Text("", size=fs(11, scale), color="#8A6D3B", visible=False)
+
+    def on_kit(new_id: int) -> None:
+        if new_id == current_kit[0]:
+            return
+        current_kit[0] = new_id
+        repo.set_campaign_brand_kit(campaign_id, new_id)
+        if (campaign.get("content") or "").strip():
+            kit_notice.value = (
+                "킷을 바꿨습니다. 지금 보이는 초안은 이전 킷으로 쓴 것이라, 새 킷을 반영하려면 "
+                "[🪄 초안 생성]을 다시 눌러주세요."
+            )
+        else:
+            kit_notice.value = "킷을 바꿨습니다. 초안을 생성할 때 이 킷을 씁니다."
+        kit_notice.visible = True
+        kit_notice.update()
+        refresh_sim()
+
+    controls.append(ft.Row([
+        kit_dropdown(
+            current_kit[0], on_kit, label="브랜드 킷 (이 글의 사업 분야)", width=320,
+            disabled=campaign.get("status") == "processing",
+        ),
+        ft.Text("메모의 주제에 맞는 킷을 고르세요. 다른 분야 킷을 고르면 그 분야 내용이 섞입니다.",
+                size=fs(11, scale), color=BRAND_COLORS["text_muted"], expand=True),
+    ]))
+    controls.append(kit_notice)
 
     if campaign.get("source_url"):
         controls.append(ft.Text(f"📰 원문: {campaign['source_url']}", size=fs(11, scale), color=BRAND_COLORS["text_muted"]))
@@ -268,17 +308,6 @@ def _build_campaign_editor(page: ft.Page, campaign_id: str, scale: float, reload
             "판정으로 검색에서 빠집니다.",
             size=fs(11, scale), color=BRAND_COLORS["text_muted"],
         ))
-
-    if not controls:
-        # 뉴스 큐레이션에서 온 콘텐츠는 title_field 앞에 위 원문/원 기사 제목
-        # 텍스트가 먼저 오지만, 일반(수동) 콘텐츠는 title_field가 스크롤
-        # 영역의 진짜 첫 컨트롤이 된다 — 컨테이너에 top padding을 줘도
-        # (Container(expand=True, padding=...) 안의 스크롤 가능한 Column이
-        # 그 padding을 반영하지 않는 것으로 라이브에서 확인됨) 라벨이 위쪽에
-        # 잘리는 게 그대로였다. 그래서 padding에 기대는 대신, 실제로 자리를
-        # 차지하는 빈 컨트롤을 title_field 앞에 둔다 — 이러면 어떤 레이아웃
-        # 계산이든 title_field가 더 이상 "맨 위 첫 컨트롤"이 아니게 된다.
-        controls.append(ft.Container(height=4))
 
     title_field = ft.TextField(
         label="제목", value=campaign.get("title") or "",
@@ -778,9 +807,12 @@ def _build_channel_tabs(page: ft.Page, campaign: dict, title_field: ft.TextField
             save_rule_status.color = "#B3261E"
             save_rule_status.update()
             return
-        added = repo.append_tone_rule(rule)
+        # 위 편집기에서 킷을 바꿨을 수 있으므로 지금 연결된 킷을 다시 읽습니다.
+        kit = repo.get_campaign_brand_kit(repo.get_campaign(campaign["id"]))
+        added = repo.append_tone_rule(rule, kit_id=kit.get("id"))
+        kit_name = kit.get("name") or ""
         save_rule_status.value = (
-            "✅ 브랜드 킷 톤앤매너 가이드에 추가했습니다. 다음 초안부터 항상 적용됩니다. "
+            f"✅ '{kit_name}' 킷의 톤앤매너 가이드에 추가했습니다. 이 킷으로 쓰는 다음 초안부터 항상 적용됩니다. "
             "(브랜드 킷 화면에서 고치거나 지울 수 있어요)"
             if added else "이미 톤앤매너 가이드에 있는 규칙입니다."
         )
@@ -789,7 +821,7 @@ def _build_channel_tabs(page: ft.Page, campaign: dict, title_field: ft.TextField
 
     save_rule_button = ft.OutlinedButton(
         "📌 이 요청을 브랜드 킷에 저장", on_click=on_save_rule,
-        tooltip="이 글만이 아니라 앞으로 만들 모든 초안에 이 요청을 적용합니다.",
+        tooltip="이 글만이 아니라 같은 킷으로 만들 모든 초안에 이 요청을 적용합니다.",
     )
 
     naver_tab = ft.Column(
@@ -916,7 +948,7 @@ def _build_channel_tabs(page: ft.Page, campaign: dict, title_field: ft.TextField
         shorts_tab = ft.Text("쇼츠 구성안이 아직 없습니다.", size=fs(12, scale), color=BRAND_COLORS["text_muted"])
 
     # 꺼진 채널은 탭에서도 뺍니다 (⚙️ 설정 → 📣 생성 채널).
-    active = set(enabled_channels(repo.get_brand_kit()))
+    active = set(enabled_channels(repo.get_app_settings()))
     tabs = [("네이버 본문", naver_tab)]
     for key, label, tab in (
         ("instagram", "인스타 캡션", ig_tab),

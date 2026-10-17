@@ -20,6 +20,9 @@ the nav-rail switch programmatically — e.g. news_curation_view's "뉴스 기�
 콘텐츠" cards jumping straight to a specific campaign in the workbench,
 instead of only handing off data and making the marketer find the campaign
 in the dropdown themselves.
+
+`editing_brand_kit_id` remembers which kit the 🧵 브랜드 킷 screen was
+editing, so switching screens and coming back doesn't jump to the default kit.
 """
 from __future__ import annotations
 
@@ -39,3 +42,6 @@ class AppState:
     font_scale: float = DEFAULT_FONT_SCALE
     request_rerender: Optional[Callable[[], None]] = None
     navigate_to_workbench: Optional[Callable[[], None]] = None
+    editing_brand_kit_id: Optional[int] = None
+    # 뉴스 큐레이션에서 고른 킷 — 키워드 칩과 워크벤치로 보내는 글이 이 킷 기준입니다.
+    news_brand_kit_id: Optional[int] = None

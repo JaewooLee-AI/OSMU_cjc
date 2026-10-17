@@ -161,8 +161,8 @@ def main(page: ft.Page) -> None:
     if seeded:
         page.show_dialog(ft.SnackBar(ft.Text("회사 자료 기반 Brand Kit을 초기 세팅했습니다.")))
 
-    brand_kit = repo.get_brand_kit()
-    page.window.title = f"{brand_kit.get('sub_brand') or ''} OSMU 워크벤치".strip()
+    company = repo.get_company_profile()
+    page.window.title = f"{company.get('sub_brand') or ''} OSMU 워크벤치".strip()
 
     show(DEFAULT_INDEX)
 

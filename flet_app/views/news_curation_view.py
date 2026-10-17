@@ -18,6 +18,7 @@ from ai_workers.news_search import search_news_by_keywords
 from core import repo
 
 from flet_app.components.collapsible import collapsible
+from flet_app.kit_picker import kit_dropdown
 from flet_app.state import AppState
 from flet_app.theme import BRAND_COLORS, fs, status_chip
 
@@ -33,8 +34,28 @@ def _volume_of(keyword: str) -> float:
 
 
 def build(page: ft.Page, state: AppState) -> ft.Control:
+    root = ft.Container(expand=True)
+
+    def render() -> None:
+        root.content = _build_screen(page, state, render)
+        root.update()
+
+    root.content = _build_screen(page, state, render)
+    return root
+
+
+def _build_screen(page: ft.Page, state: AppState, render) -> ft.Control:
     scale = state.font_scale
-    brand_kit = repo.get_brand_kit()
+    active_ids = {k["id"] for k in repo.list_brand_kits()}
+    if state.news_brand_kit_id not in active_ids:
+        state.news_brand_kit_id = repo.default_brand_kit_id()
+    kit_id = state.news_brand_kit_id
+    brand_kit = repo.get_brand_kit(kit_id)
+
+    def on_kit(new_id: int) -> None:
+        state.news_brand_kit_id = new_id
+        render()
+
     seo_keywords = brand_kit.get("seo_keywords") or []
     # 검색량 상위 3개를 기본 선택 — 뉴스가 실제로 걸릴 확률은 검색량과 같이 간다.
     default_keywords = set(sorted(seo_keywords, key=_volume_of, reverse=True)[:3])
@@ -46,12 +67,19 @@ def build(page: ft.Page, state: AppState) -> ft.Control:
             "뉴스를 우리 브랜드 관점으로 재해석한 글이 나옵니다.",
             size=fs(12, scale), color=BRAND_COLORS["text_muted"],
         ),
+        ft.Row([
+            kit_dropdown(kit_id, on_kit),
+            ft.Text(
+                "검색 키워드는 이 킷의 SEO 키워드이고, 워크벤치로 보낸 글도 이 킷으로 연결됩니다.",
+                size=fs(12, scale), color=BRAND_COLORS["text_muted"], expand=True,
+            ),
+        ]),
     ]
 
     if not seo_keywords:
         controls.append(ft.Container(
             content=ft.Text(
-                "브랜드 킷에 SEO 키워드가 없습니다. 아래에 직접 검색어를 입력하거나 먼저 키워드를 등록하세요.",
+                "이 킷에 SEO 키워드가 없습니다. 아래에 직접 검색어를 입력하거나 먼저 키워드를 등록하세요.",
                 size=fs(12, scale), color="#2F6B7A",
             ),
             bgcolor="#E7F1F3", padding=10, border_radius=8,
@@ -113,7 +141,7 @@ def build(page: ft.Page, state: AppState) -> ft.Control:
                 # 검색에서 빠진다. AI가 기사 내용을 읽고 브랜드 관점의 제목을 새로 짓는다.
                 created = repo.insert_campaign(
                     source_type="news", source_url=article["url"], source_title=article["title"],
-                    status="awaiting_media",
+                    status="awaiting_media", brand_kit_id=kit_id,
                 )
                 state.pending_workbench_campaign_id = created["id"]
                 item_status.value = "✅ 워크벤치로 보냈습니다. 사진과 메모를 붙인 뒤 초안을 생성하세요."
@@ -250,6 +278,7 @@ def build(page: ft.Page, state: AppState) -> ft.Control:
         created = repo.insert_campaign(
             source_type="news", source_url=url_field.value.strip(),
             memo=manual_memo_field.value.strip() or None, status="awaiting_media",
+            brand_kit_id=kit_id,
         )
         state.pending_workbench_campaign_id = created["id"]
         url_status.value = "✅ 워크벤치로 보냈습니다."
