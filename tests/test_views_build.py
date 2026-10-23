@@ -127,3 +127,11 @@ def test_formatted_post_renders_in_workbench_simulator_and_publish(populated):
 def test_brand_kit_view_builds_with_design_fields(populated):
     from flet_app.views import brand_kit_view
     assert _walk(brand_kit_view.build(FakePage(), AppState())) > 50
+
+
+def test_transfer_tab_builds(populated):
+    from flet_app.views import settings_view
+    tab = settings_view._build_transfer_tab(FakePage(), 1.0)
+    labels = [getattr(c, "label", "") or "" for c in tab.controls if isinstance(c, ft.Checkbox)]
+    assert any("브랜드 킷" in label and "이 PC:" in label for label in labels)
+    assert _walk(tab) > 15

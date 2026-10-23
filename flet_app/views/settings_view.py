@@ -1,5 +1,5 @@
-"""4개 탭 전부(LLM 벤더 / 네이버 API / 이미지 분석 /
-사용량), 그리고 새로 추가된 글자 크기 조정 기능.
+"""탭 전부(LLM 벤더 / 생성 채널 / 네이버 API / 이미지 분석 / 사용량 / 데이터 옮기기),
+그리고 글자 크기 조정 기능.
 
 네이버 API 탭의 키워드 갱신 마법사는 4단계 상태머신인데, 그 상태(`stage`,
 `candidates`, `scored`, `proposal`)는 원래부터 `core.repo.get_app_state`/
@@ -30,7 +30,8 @@ from ai_workers.multi_llm_router import (
     test_connection,
     vision_capable_vendors,
 )
-from core import repo
+from core import repo, transfer
+from core.db import DATA_DIR
 from core.crypto_utils import decrypt_api_key, encrypt_api_key
 
 from flet_app.kit_picker import kit_dropdown
@@ -1905,6 +1906,152 @@ def _build_channels_tab(scale: float) -> ft.Control:
     )
 
 
+def _build_transfer_tab(page: ft.Page, scale: float) -> ft.Control:
+    """📦 데이터 옮기기 — 한 PC에서 세팅한 브랜드 킷·회사 설정·API 키·AI 단가·키워드 측정값·제목 이력을
+    파일로 다른 PC에 옮긴다(core/transfer.py). 받는 PC의 글·사진·게시 기록·네이버 로그인은 건드리지 않는다."""
+    local = transfer.summary_of_local()
+    export_checks = {
+        key: ft.Checkbox(
+            label=f"{label}\n    이 PC: {local[key]}",
+            value=not (key == "api_keys" and local[key].startswith("(")),  # 키가 없으면 기본 해제
+        )
+        for key, label in transfer.PARTS.items()
+    }
+    export_pw = ft.TextField(label=f"비밀번호 (API 키를 내보낼 때 필수, {transfer.MIN_PASSWORD_LENGTH}자 이상)",
+                             password=True, can_reveal_password=True, width=420)
+    export_pw2 = ft.TextField(label="비밀번호 확인", password=True, can_reveal_password=True, width=420)
+    export_status = ft.Text("", size=fs(12, scale))
+
+    def _show(text: ft.Text, message: str, ok: bool) -> None:
+        text.value, text.color = message, ("#1B6E3C" if ok else "#B3261E")
+        text.update()
+
+    async def on_export(e: ft.Event) -> None:
+        parts = [k for k, cb in export_checks.items() if cb.value]
+        if "api_keys" in parts and (export_pw.value or "") != (export_pw2.value or ""):
+            _show(export_status, "비밀번호와 확인이 다릅니다.", False)
+            return
+        try:
+            data = transfer.export_bundle(parts, export_pw.value or None)
+        except transfer.TransferError as exc:
+            _show(export_status, f"❌ {exc}", False)
+            return
+        path = await ft.FilePicker().save_file(
+            dialog_title="OSMU 데이터 내보내기", file_name=transfer.default_file_name(),
+            file_type=ft.FilePickerFileType.CUSTOM, allowed_extensions=[transfer.FILE_EXTENSION],
+        )
+        if not path:
+            return
+        if not path.endswith("." + transfer.FILE_EXTENSION):
+            path += "." + transfer.FILE_EXTENSION
+        try:
+            with open(path, "wb") as fh:
+                fh.write(data)
+        except OSError as exc:
+            _show(export_status, f"❌ 저장하지 못했습니다: {exc}", False)
+            return
+        _show(export_status, f"✅ 저장했습니다: {path}", True)
+
+    import_state: dict = {}
+    import_info = ft.Text("", size=fs(12, scale))
+    import_checks = {key: ft.Checkbox(label=label, value=True, visible=False) for key, label in transfer.PARTS.items()}
+    import_pw = ft.TextField(label="내보낼 때 정한 비밀번호 (API 키를 가져올 때)", password=True,
+                             can_reveal_password=True, width=420, visible=False)
+    import_status = ft.Text("", size=fs(12, scale), selectable=True)
+    import_button = ft.FilledButton("📥 이 PC에 가져오기", disabled=True)
+
+    async def on_pick(e: ft.Event) -> None:
+        files = await ft.FilePicker().pick_files(
+            dialog_title="OSMU 데이터 파일 열기", with_data=True,
+            file_type=ft.FilePickerFileType.CUSTOM, allowed_extensions=[transfer.FILE_EXTENSION],
+        )
+        if not files:
+            return
+        raw = files[0].bytes
+        if raw is None and getattr(files[0], "path", None):
+            with open(files[0].path, "rb") as fh:
+                raw = fh.read()
+        try:
+            bundle = transfer.read_bundle(raw or b"")
+        except transfer.TransferError as exc:
+            import_info.value, import_info.color = f"❌ {exc}", "#B3261E"
+            import_button.disabled = True
+            for cb in import_checks.values():
+                cb.visible = False
+            import_pw.visible = False
+            page.update()
+            return
+        import_state["raw"] = raw
+        parts = set(bundle.get("parts") or [])
+        preview = transfer.preview_bundle(bundle)
+        for key, cb in import_checks.items():
+            cb.visible = key in parts
+            cb.value = key in parts
+            cb.label = f"{transfer.PARTS[key]}\n    → {preview.get(key, '')}"
+        import_pw.visible = "api_keys" in parts
+        import_info.value = f"📄 {files[0].name} · 만든 시각 {bundle.get('created_at', '-')}"
+        import_info.color = BRAND_COLORS["text"]
+        import_button.disabled = False
+        import_status.value = ""
+        page.update()
+
+    def on_import(e: ft.Event) -> None:
+        parts = [k for k, cb in import_checks.items() if cb.visible and cb.value]
+        try:
+            result = transfer.import_bundle(import_state.get("raw") or b"", parts, import_pw.value or None)
+        except transfer.TransferError as exc:
+            _show(import_status, f"❌ {exc}", False)
+            return
+        backup = result.pop("backup", None)
+        lines = ["✅ " + " / ".join(result.values())]
+        if backup:
+            lines.append(f"가져오기 전 DB를 복사해 두었습니다: {backup}")
+        lines.append("다른 메뉴로 갔다 오면 바뀐 값이 보입니다.")
+        _show(import_status, "\n".join(lines), True)
+
+    import_button.on_click = on_import
+
+    return ft.Column(
+        [
+            ft.Text(
+                "담당자가 여러 명일 때, 한 PC에서 세팅한 내용을 파일 하나로 다른 PC에 옮깁니다. 가져와도 받는 PC의 "
+                "글·사진·게시 기록·네이버 로그인은 바뀌지 않습니다. 브랜드 킷을 점검한 뒤 담당자에게 나눠 줄 때도 씁니다.",
+                size=fs(12, scale), color=BRAND_COLORS["text_muted"],
+            ),
+            ft.Text(f"옮기지 않는 것: {transfer.NOT_TRANSFERRED}.", size=fs(11, scale), color=BRAND_COLORS["text_muted"]),
+            ft.Text("📤 내보내기 (기준 PC)", weight=ft.FontWeight.BOLD, size=fs(14, scale)),
+            *export_checks.values(),
+            ft.Row([export_pw, export_pw2], wrap=True),
+            _warn_box(
+                "API 키는 이 비밀번호로 암호화되어 파일에 들어갑니다. 파일과 비밀번호를 모두 가진 사람은 키를 쓸 수 있으니, "
+                "비밀번호는 파일과 다른 경로(전화·대면 등)로 알려 주세요. 브랜드 킷·회사 설정은 암호화하지 않습니다.", scale,
+            ),
+            ft.FilledButton("📤 파일로 내보내기", on_click=on_export),
+            export_status,
+            ft.Divider(),
+            ft.Text("📥 가져오기 (받는 PC)", weight=ft.FontWeight.BOLD, size=fs(14, scale)),
+            ft.Text(
+                "브랜드 킷은 이름으로 맞춥니다 — 같은 이름의 킷은 내용을 바꾸고, 없는 킷은 새로 만듭니다. 이 PC에만 있는 "
+                "킷은 그대로 둡니다. 가져오기 직전의 DB는 데이터 폴더의 backups에 복사해 둡니다(최근 5개).",
+                size=fs(11, scale), color=BRAND_COLORS["text_muted"],
+            ),
+            ft.OutlinedButton("📂 .osmu 파일 열기", on_click=on_pick),
+            import_info,
+            *import_checks.values(),
+            import_pw,
+            import_button,
+            import_status,
+            ft.Divider(),
+            ft.Text(
+                "PC를 통째로 바꿀 때(글·사진까지 전부 옮길 때)는 이 기능 대신 앱을 닫고 데이터 폴더 "
+                f"({DATA_DIR}) 전체를 새 PC의 같은 자리에 복사하세요.",
+                size=fs(11, scale), color=BRAND_COLORS["text_muted"], selectable=True,
+            ),
+        ],
+        spacing=8, scroll=ft.ScrollMode.AUTO, expand=True,
+    )
+
+
 def build(page: ft.Page, state: AppState) -> ft.Control:
     scale = state.font_scale
     vision_box = ft.Container(content=_build_vision_tab(scale), padding=10)
@@ -1918,7 +2065,7 @@ def build(page: ft.Page, state: AppState) -> ft.Control:
             ft.Text("설정 · 토큰", size=fs(24, scale), weight=ft.FontWeight.BOLD),
             _build_font_scale_section(state, scale),
             ft.Tabs(
-                length=5,
+                length=6,
                 expand=True,
                 content=ft.Column(
                     expand=True,
@@ -1930,6 +2077,7 @@ def build(page: ft.Page, state: AppState) -> ft.Control:
                                 ft.Tab(label="🔍 네이버 API"),
                                 ft.Tab(label="🖼️ 이미지 분석 (토큰)"),
                                 ft.Tab(label="📈 사용량"),
+                                ft.Tab(label="📦 데이터 옮기기"),
                             ]
                         ),
                         ft.TabBarView(
@@ -1940,6 +2088,7 @@ def build(page: ft.Page, state: AppState) -> ft.Control:
                                 ft.Container(content=_build_naver_tab(page, scale), padding=10),
                                 vision_box,
                                 ft.Container(content=_build_usage_tab(scale), padding=10),
+                                ft.Container(content=_build_transfer_tab(page, scale), padding=10),
                             ],
                         ),
                     ],

@@ -74,7 +74,7 @@ https://github.com/JaewooLee-AI/OSMU_cjc/releases/latest
 | 📰 뉴스 큐레이션 | 고른 킷의 키워드로 Google/네이버 뉴스 검색 → 워크벤치로 전달 |
 | 🧵 브랜드 킷 | 킷 목록(추가·복제·삭제) · 킷별 페르소나·톤앤매너·핵심 팩트·용어집·SEO 키워드 · 회사 공통 금기어 사전 |
 | 🚀 네이버 게시 | 로그인 세션 저장, 스마트에디터 반자동 입력(서식 포함), 발행 후 글 주소 기록 |
-| ⚙️ 설정 · 토큰 | LLM 벤더 등록, 이미지 분석 토큰 정책, 사용량·금액(단가 표·환율·월 예산) 리포트, 네이버 서식 붙여넣기 방식 |
+| ⚙️ 설정 · 토큰 | LLM 벤더 등록, 이미지 분석 토큰 정책, 사용량·금액(단가 표·환율·월 예산) 리포트, 네이버 서식 붙여넣기 방식, 📦 데이터 옮기기(담당자 PC 사이) |
 
 ---
 
@@ -278,8 +278,30 @@ data/                      osmu.db · assets/ · .master_key · naver_state.json
 
 ## 데이터와 백업
 
-전부 `data/` 안에 있습니다: `osmu.db`(SQLite), `assets/`(사진), `.master_key`(API 키 암호화 키, 0600),
-`naver_state.json`(네이버 세션). 이 디렉터리만 백업하면 됩니다.
+전부 데이터 폴더(설치형은 `%APPDATA%\OSMU_CJC`, 소스 실행은 `data/`) 안에 있습니다: `osmu.db`(SQLite), `assets/`(사진),
+`.master_key`(API 키 암호화 키, 0600), `naver_state.json`(네이버 세션), `backups/`(📦 가져오기 직전 DB 사본, 최근 5개).
+이 디렉터리만 백업하면 됩니다. PC를 통째로 바꿀 때도 앱을 닫고 이 폴더 전체를 새 PC의 같은 자리에 복사합니다.
+
+### 담당자가 여러 명일 때 — 📦 데이터 옮기기
+
+앱은 PC마다 데이터를 따로 저장합니다. 한 PC에서 세팅한 값을 ⚙️ 설정 → 📦 데이터 옮기기 → [파일로 내보내기]로
+`.osmu` 파일 하나에 담고, 다른 담당자 PC에서 [가져오기]하면 같은 상태로 씁니다([core/transfer.py](core/transfer.py)).
+OSMU_osw의 같은 기능을 이 앱의 여러 브랜드 킷 구조와 기능 보완 v2 테이블에 맞춰 옮긴 것입니다.
+
+| 항목 | 담는 것 | 가져올 때 |
+|---|---|---|
+| 브랜드 킷 | 보관하지 않은 킷 전부(`brand_kit`) | **킷 이름으로 맞춤** — 같은 이름은 내용을 바꾸고, 없으면 새로 만듦. 킷 ID는 받는 PC 것을 유지하고, 받는 PC에만 있는 킷은 그대로 |
+| 회사 공통·앱 설정 | `company_profile`, `app_settings`, `app_state.naver_format_mode` | 바꿈. 단 받는 PC에 키가 없는 벤더로 모델 선택을 바꾸지는 않음 |
+| API 키 | `llm_settings`, `naver_api_settings`, `searchad_settings` | 비밀번호(PBKDF2-SHA256 → AES-256-GCM)로 풀어 받는 PC의 마스터 키로 다시 암호화. 틀린 비밀번호면 아무것도 바꾸지 않음 |
+| AI 비용 설정 | `model_prices`, `app_state.usd_krw`·`usage_budget` | 같은 모델 단가는 바꾸고, 받는 PC의 '단가 미등록' 기록을 그 단가로 채움 |
+| 키워드 측정값 | `keyword_cache` | 받는 PC에 더 최근 값이 있으면 유지 |
+| 제목 이력 | `title_history`(글 ID 태그는 뺌) | 이미 있는 제목은 건너뜀 |
+
+옮기지 않는 것: `campaigns`(글·서식·캘린더 일정·게시 기록), `assets`와 `assets/` 폴더(사진), `vision_cache`, `topics`,
+`schedule_rules`(받는 PC의 글·킷 ID에 연결됨), `usage_log`, `naver_api_calls`, 그 밖의 `app_state`(키워드 화면 진행 상태
+`sweep:{킷 ID}`, 글자 크기 등), `naver_state.json`(네이버 로그인은 PC마다), `.master_key`(절대 옮기지 않음).
+가져오기는 한 트랜잭션이고, 바꾸기 직전에 받는 PC의 DB를 `backups/`에 복사합니다. 다른 회사용 OSMU 앱(OSMU_osw 등)이
+만든 파일은 형식 이름이 달라 받지 않습니다.
 
 `data/`를 클라우드에 동기화한다면 마스터 키는 밖으로 빼세요 (앱은 시작할 때 프로젝트 루트의 `.env`를 읽습니다.
 마스터 키를 찾지 못했는데 이미 암호화된 키가 저장돼 있으면, 새 키를 만들어 기존 키를 못 쓰게 만드는 대신 오류를 냅니다):
