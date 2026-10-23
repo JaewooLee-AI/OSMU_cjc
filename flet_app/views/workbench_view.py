@@ -553,6 +553,21 @@ def _build_campaign_editor(
                 added = True
         if added:
             repo.update_campaign(campaign_id, storage_file_paths=attached)
+            # 초안을 만든 뒤 올린 사진은 '📷 사진 자리' 표시가 있던 곳에 차례로 넣습니다(AI 호출 없음).
+            fresh = repo.get_campaign(campaign_id) or {}
+            if (fresh.get("content") or "").strip():
+                new_content, new_fmt, placed = formatting.fill_photo_hints(
+                    fresh["content"], fresh.get("content_format"), attached,
+                )
+                if placed:
+                    repo.update_campaign(campaign_id, content=new_content, content_format=new_fmt)
+                    left = len(formatting.unplaced_photos(new_content, attached))
+                    page.show_dialog(ft.SnackBar(ft.Text(
+                        f"📷 사진 {placed}장을 '사진 자리'에 넣고 그 표시를 지웠습니다."
+                        + (f" 자리가 없는 사진 {left}장은 게시할 때 글 끝에 붙습니다." if left else "")
+                    )))
+                    reload()
+                    return
             upload_status.value = f"{len(files)}장 업로드했습니다."
             _render_photos()
             _render_cost()

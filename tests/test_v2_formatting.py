@@ -159,3 +159,27 @@ def test_resolve_prefers_campaign_then_kit():
     assert F.resolve(None, kit) == {"strength": "minimal", "template": "info"}
     assert F.resolve("rich", kit)["strength"] == "rich"
     assert F.resolve("bogus", {}) == {"strength": F.DEFAULT_STRENGTH, "template": F.DEFAULT_TEMPLATE}
+
+
+def test_fill_photo_hints_places_in_order_and_removes_hints():
+    content = "도입 문단.\n\n둘째 문단.\n[IMAGE: old.jpg]\n셋째 문단."
+    fmt = {"items": [
+        {"id": 1, "type": "photo_hint", "after": "둘째 문단.", "caption": "둘째 뒤"},
+        {"id": 2, "type": "photo_hint", "after": "", "caption": "맨 앞"},
+        {"id": 3, "type": "photo_hint", "after": "사라진 문단", "caption": "못 찾음"},
+        {"id": 4, "type": "bold", "text": "셋째"},
+    ]}
+    new, new_fmt, placed = F.fill_photo_hints(content, fmt, ["old.jpg", "a.jpg", "b.jpg", "c.jpg"])
+    assert placed == 2
+    assert new.split("\n")[0] == "[IMAGE: a.jpg]"
+    assert "둘째 문단.\n[IMAGE: b.jpg]" in new
+    assert new.replace("[IMAGE: a.jpg]\n", "").replace("[IMAGE: b.jpg]\n", "") == content  # 글자는 그대로
+    assert [i["id"] for i in new_fmt["items"]] == [3, 4]  # 쓴 자리만 지움
+    assert F.unplaced_photos(new, ["old.jpg", "a.jpg", "b.jpg", "c.jpg"]) == ["c.jpg"]
+
+
+def test_fill_photo_hints_noop_without_hints_or_new_photos():
+    content = "문단.\n[IMAGE: a.jpg]"
+    fmt = {"items": [{"id": 1, "type": "photo_hint", "after": "문단.", "caption": "x"}]}
+    assert F.fill_photo_hints(content, fmt, ["a.jpg"])[2] == 0
+    assert F.fill_photo_hints(content, {"items": []}, ["a.jpg", "b.jpg"])[2] == 0

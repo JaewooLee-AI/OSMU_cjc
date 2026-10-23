@@ -548,6 +548,9 @@ def _run(campaign_id: str, on_status: Callable[[str], None]) -> None:
     format_mode = (repo.get_app_state(formatting.NAVER_FORMAT_STATE_KEY) or {}).get("value") \
         or formatting.DEFAULT_NAVER_FORMAT_MODE
     segments = formatting.naver_segments(content, content_format, format_mode)
+    # 첨부했지만 본문에 배치되지 않은 사진은 글 끝에 붙입니다 — 미리보기(시뮬레이터)가 그렇게
+    # 보여 주는데, 예전에는 게시 때 빠져서 미리보기와 실제 글이 달랐습니다.
+    segments += [("image", p) for p in formatting.unplaced_photos(content, campaign.get("storage_file_paths") or [])]
     expected = formatting.expected_components(content, content_format)
     image_tags = [value for kind, value in segments if kind == "image"]
 

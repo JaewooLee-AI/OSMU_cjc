@@ -758,3 +758,49 @@ def naver_full_html(content: str, fmt: Optional[dict], mode: str = DEFAULT_NAVER
         else:
             parts.append(value)
     return "".join(parts)
+
+
+def fill_photo_hints(content: str, fmt: Optional[dict], attached: List[str]) -> Tuple[str, dict, int]:
+    """초안을 만든 뒤 첨부한 사진을 '사진 자리' 표시가 있던 곳에 차례로 넣습니다 (AI 호출 없음).
+
+    본문에 아직 배치되지 않은 첨부 사진만 씁니다. 사진 자리마다 그 앞 문단 바로 뒤에 `[IMAGE: 경로]` 줄을
+    넣고 그 '사진 자리' 서식은 지웁니다. 사진이 자리보다 많으면 남은 사진은 그대로(게시 때 글 끝에 붙음),
+    자리가 더 많으면 남은 자리는 그대로 둡니다. (새 본문, 새 서식, 넣은 사진 수)를 돌려줍니다.
+    """
+    fmt = dict(fmt or {})
+    items = list(fmt.get("items") or [])
+    tagged = set(IMAGE_TAG_RE.findall(content or ""))
+    pending_photos = [p for p in (attached or []) if p not in tagged]
+    hints = [i for i in items if i.get("type") == "photo_hint"]
+    if not pending_photos or not hints:
+        return content, fmt, 0
+
+    lines = (content or "").split("\n")
+    text_lines = [n for n, line in enumerate(lines) if line.strip() and not IMAGE_TAG_RE.fullmatch(line.strip())]
+    texts = [lines[n].strip() for n in text_lines]
+
+    # 문서 순서대로 자리를 고릅니다(앞 문단이 없는 자리 = 글 맨 앞). 못 찾은 자리는 건너뜁니다.
+    located = []
+    for hint in hints:
+        after = hint.get("after") or ""
+        if not after:
+            located.append((-1, hint))
+            continue
+        idx = _find_para(after, texts)
+        if idx is not None:
+            located.append((text_lines[idx], hint))
+    located.sort(key=lambda x: x[0])
+    pairs = list(zip(located, pending_photos))
+
+    # 뒤에서부터 넣어야 앞 줄 번호가 밀리지 않습니다.
+    for (line_no, _hint), photo in reversed(pairs):
+        lines.insert(line_no + 1, f"[IMAGE: {photo}]")
+    used_ids = {hint.get("id") for (_n, hint), _p in pairs}
+    fmt["items"] = [i for i in items if not (i.get("type") == "photo_hint" and i.get("id") in used_ids)]
+    return "\n".join(lines), fmt, len(pairs)
+
+
+def unplaced_photos(content: str, attached: List[str]) -> List[str]:
+    """첨부했지만 본문 어디에도 배치되지 않은 사진 (첨부 순서)."""
+    tagged = set(IMAGE_TAG_RE.findall(content or ""))
+    return [p for p in dict.fromkeys(attached or []) if p not in tagged]
