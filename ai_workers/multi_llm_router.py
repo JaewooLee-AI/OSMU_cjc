@@ -246,10 +246,12 @@ def _call_openai(model_name, api_key, prompt, system, max_tokens):
     )
     choice = res.choices[0]
     text = choice.message.content or ""
-    usage_in = usage_out = 0
+    usage_in = usage_out = cached = 0
     if getattr(res, "usage", None):
         usage_in, usage_out = res.usage.prompt_tokens, res.usage.completion_tokens
-    return text, usage_in, usage_out, choice.finish_reason == "length"
+        details = getattr(res.usage, "prompt_tokens_details", None)
+        cached = (getattr(details, "cached_tokens", 0) or 0) if details else 0
+    return text, usage_in, usage_out, choice.finish_reason == "length", cached
 
 
 def _call_anthropic(model_name, api_key, prompt, system, max_tokens):
@@ -271,16 +273,21 @@ def _call_anthropic(model_name, api_key, prompt, system, max_tokens):
     res = client.messages.create(**kwargs)
     raise_if_refused(res)
     text = "".join(block.text for block in res.content if getattr(block, "type", "") == "text")
-    usage_in = usage_out = 0
+    usage_in = usage_out = cached = 0
     usage = getattr(res, "usage", None)
     if usage:
+        # Cache reads are recorded separately (`cached`) so they can be priced
+        # at the cache-read rate. Cache writes stay in the ordinary input
+        # count and are priced at the input rate — a slight underestimate,
+        # since writes bill above it.
+        cached = getattr(usage, "cache_read_input_tokens", 0) or 0
         usage_in = (
             (usage.input_tokens or 0)
-            + (getattr(usage, "cache_read_input_tokens", 0) or 0)
+            + cached
             + (getattr(usage, "cache_creation_input_tokens", 0) or 0)
         )
         usage_out = usage.output_tokens or 0
-    return text, usage_in, usage_out, res.stop_reason == "max_tokens"
+    return text, usage_in, usage_out, res.stop_reason == "max_tokens", cached
 
 
 # Models that turned out to reject thinking_budget=0, so later calls in this
@@ -343,10 +350,12 @@ def _call_google(model_name, api_key, prompt, system, max_tokens):
             GOOGLE_NO_ZERO_THINKING.add(model_name)
 
     text = res.text or ""
-    usage_in = usage_out = 0
+    usage_in = usage_out = cached = 0
     meta = getattr(res, "usage_metadata", None)
     if meta:
         usage_in = getattr(meta, "prompt_token_count", 0) or 0
+        # Implicit/explicit context caching — already included in prompt_token_count.
+        cached = getattr(meta, "cached_content_token_count", 0) or 0
         usage_out = (getattr(meta, "candidates_token_count", 0) or 0) + (
             getattr(meta, "thoughts_token_count", 0) or 0
         )
@@ -354,7 +363,7 @@ def _call_google(model_name, api_key, prompt, system, max_tokens):
     candidates = getattr(res, "candidates", None) or []
     if candidates:
         truncated = "MAX_TOKENS" in str(getattr(candidates[0], "finish_reason", "") or "")
-    return text, usage_in, usage_out, truncated
+    return text, usage_in, usage_out, truncated, cached
 
 
 _CALLERS = {"openai": _call_openai, "anthropic": _call_anthropic, "google": _call_google}
@@ -382,7 +391,7 @@ def generate_text(
 
     budget = max_tokens
     for attempt in range(2):
-        text, usage_in, usage_out, truncated = caller(model_name, api_key, prompt, system, budget)
+        text, usage_in, usage_out, truncated, cached = caller(model_name, api_key, prompt, system, budget)
 
         if not usage_in:
             usage_in = _estimate_tokens((system or "") + prompt)
@@ -394,6 +403,7 @@ def generate_text(
             model=model_name,
             est_input_tokens=usage_in,
             est_output_tokens=usage_out,
+            cached_input_tokens=cached,
             note=f"{note or 'text'}{' (truncated)' if truncated else ''}",
         )
 

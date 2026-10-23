@@ -24,9 +24,9 @@ assume a real person is at the keyboard.
 """
 from __future__ import annotations
 
-import html
 import sys
 import threading
+import re
 import time
 import traceback
 from pathlib import Path
@@ -52,28 +52,93 @@ from ai_workers.naver_publisher import (
     launch_browser,
     split_publish_error,
 )
-from ai_workers.photo_placement import split_segments
+from ai_workers import formatting
 from core import repo, storage
 from core.clipboard_utils import copy_html_to_clipboard
 
 _HUMAN_DELAY = (0.15, 0.35)
 
 
+def extract_post_url(url: str, blog_id: str) -> Optional[str]:
+    """발행이 끝난 뒤 Chrome이 옮겨 가는 '글 보기' 주소이면 정리한 주소를, 아니면 None.
+
+    네이버는 발행하면 `blog.naver.com/{아이디}/{글번호}`(또는 같은 글의
+    `PostView.naver?blogId=…&logNo=…`)로 이동합니다. 글쓰기 화면(`Redirect=Write`,
+    `PostWriteForm`)이나 블로그 첫 화면은 글 번호가 없어 걸리지 않습니다.
+    """
+    if not url or not blog_id:
+        return None
+    bid = re.escape(blog_id)
+    m = re.match(rf"https?://(?:m\.)?blog\.naver\.com/{bid}/(\d{{6,}})(?:[/?#]|$)", url)
+    if m:
+        return f"https://blog.naver.com/{blog_id}/{m.group(1)}"
+    if re.search(r"PostView\.(?:naver|nhn)", url) and re.search(rf"[?&]blogId={bid}(?:&|$)", url):
+        log = re.search(r"[?&]logNo=(\d{6,})", url)
+        if log:
+            return f"https://blog.naver.com/{blog_id}/{log.group(1)}"
+    return None
+
+
+def _find_published_url(context, blog_id: str) -> Optional[str]:
+    """열린 탭과 그 안의 프레임(네이버 블로그 본문은 mainFrame 안)에서 글 보기 주소를 찾습니다."""
+    for pg in list(context.pages):
+        try:
+            urls = [pg.url] + [fr.url for fr in pg.frames]
+        except Exception:  # noqa: BLE001 — 닫히는 중인 탭
+            continue
+        for u in urls:
+            found = extract_post_url(u, blog_id)
+            if found:
+                return found
+    return None
+
+
+# 붙여 넣은 뒤 에디터 안에 생긴 서식 요소를 세는 선택자. 스마트에디터 ONE의 구성 요소 클래스
+# 이름이라 네이버가 바꾸면 0으로 셀 수 있습니다 — 그래서 결과는 '경고'가 아니라 '확인 안내'로만 씁니다.
+_COMPONENT_SELECTORS = {
+    "quote": ".se-component.se-quotation, .se-quotation",
+    "divider": ".se-component.se-horizontalLine, .se-horizontalLine",
+    "box": ".se-component.se-table, .se-table",
+}
+
+
+def _count_components(editor_frame, kind: str) -> Optional[int]:
+    try:
+        return len(editor_frame.query_selector_all(_COMPONENT_SELECTORS[kind]))
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _format_warnings(editor_frame, expected: dict, mode: str) -> list:
+    """서식이 에디터에 어떻게 들어갔는지 담당자에게 알릴 문장들."""
+    notes = []
+    if expected.get("hint"):
+        notes.append(f"📷 '사진 자리' 안내 줄 {expected['hint']}개가 본문에 들어갔습니다. 발행 전에 사진을 넣고 그 줄을 지워주세요.")
+    if mode != "editor":
+        return notes
+    labels = {"quote": "인용구", "divider": "구분선", "box": "요약 박스(표)"}
+    missing = []
+    for kind, label in labels.items():
+        want = expected.get(kind) or 0
+        if not want:
+            continue
+        got = _count_components(editor_frame, kind)
+        if got is not None and got < want:
+            missing.append(f"{label} {want}개 중 {got}개")
+    if missing:
+        notes.append(
+            "🎨 에디터 서식으로 바뀐 것을 확인하지 못했습니다: " + ", ".join(missing)
+            + ". 글자로 들어갔을 수 있으니 Chrome 창에서 확인해 주세요. 계속 그렇다면 ⚙️ 설정 → 📣 생성 채널의 "
+            "'네이버 서식 붙여넣기'를 '기호로 대체'로 바꾸면 ❝ ❞ · ──── 같은 기호 줄로 들어갑니다. "
+            "인용구·구분선 모양(따옴표형·선형 등)은 에디터에서 한 번 눌러 바꿀 수 있습니다."
+        )
+    return notes
+
+
 def _human_delay(lo: float = _HUMAN_DELAY[0], hi: float = _HUMAN_DELAY[1]) -> None:
     import random
 
     time.sleep(random.uniform(lo, hi))
-
-
-def _text_segment_to_html(text: str) -> str:
-    """Wraps each line in a <p> for the rich-HTML clipboard paste.
-
-    Escapes first: the body is Korean marketing prose, but an unescaped "&" or
-    "<" (a stray "<브랜드>" or "A&B") would be parsed as markup by Naver's
-    editor and silently swallow the surrounding text.
-    """
-    paragraphs = [p.strip() for p in text.split("\n") if p.strip()]
-    return "".join(f"<p>{html.escape(p)}</p>" for p in paragraphs)
 
 
 def _stage_images(rel_paths: list, dest_dir: Path) -> list:
@@ -477,7 +542,13 @@ def _run(campaign_id: str, on_status: Callable[[str], None]) -> None:
 
     title = (campaign.get("title") or "").strip() or "(제목 없음)"
     content = campaign.get("content") or ""
-    segments = split_segments(content)
+    content_format = campaign.get("content_format") or {}
+    # 서식(요청 4)은 붙여넣는 HTML에만 담습니다 — 툴바는 누르지 않습니다(작업계획 결정 3).
+    # 서식이 없는 글은 예전과 똑같이 문단마다 <p>입니다.
+    format_mode = (repo.get_app_state(formatting.NAVER_FORMAT_STATE_KEY) or {}).get("value") \
+        or formatting.DEFAULT_NAVER_FORMAT_MODE
+    segments = formatting.naver_segments(content, content_format, format_mode)
+    expected = formatting.expected_components(content, content_format)
     image_tags = [value for kind, value in segments if kind == "image"]
 
     with TemporaryDirectory() as tmp_dir_str:
@@ -586,8 +657,8 @@ def _run(campaign_id: str, on_status: Callable[[str], None]) -> None:
                     print("[naver_paste_worker] no body element found to refocus before paste loop")
 
                 for kind, value in segments:
-                    if kind == "text":
-                        segment_html = _text_segment_to_html(value)
+                    if kind == "html":
+                        segment_html = value
                         if not segment_html:
                             continue
                         copy_html_to_clipboard(segment_html)
@@ -678,6 +749,7 @@ def _run(campaign_id: str, on_status: Callable[[str], None]) -> None:
                     )
                 if not title_ok:
                     warnings.append("제목을 자동으로 입력하지 못했습니다. Chrome 창에서 제목을 직접 확인해주세요.")
+                warnings += _format_warnings(editor_frame, expected, format_mode)
                 if warnings:
                     repo.update_campaign(campaign_id, publish_error="⚠️ " + " / ".join(warnings))
                     on_status("⚠️ 붙여넣기는 끝났지만 확인이 필요합니다 — " + " / ".join(warnings))
@@ -703,10 +775,22 @@ def _run(campaign_id: str, on_status: Callable[[str], None]) -> None:
                 # window with its X button). Once the page is gone,
                 # wait_for_timeout raises TargetClosedError, which ends the
                 # wait just as well.
+                #
+                # While waiting, watch for the post-view address Naver moves to
+                # after the marketer clicks [발행]. That address is proof the post
+                # went out (pasting alone never flips the status — see above), so
+                # it is saved and the post marked published, once.
+                recorded_url = None
                 while True:
                     try:
                         if page.is_closed() or not browser.is_connected() or len(context.pages) == 0:
                             break
+                        if recorded_url is None:
+                            found = _find_published_url(context, blog_id)
+                            if found:
+                                recorded_url = found
+                                repo.mark_published(campaign_id, found)
+                                on_status(f"✅ 발행을 확인했습니다 — 글 주소를 저장하고 게시 완료로 바꿨습니다: {found}")
                         page.wait_for_timeout(1000)
                     except Exception:
                         break

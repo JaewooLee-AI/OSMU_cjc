@@ -18,7 +18,7 @@ from __future__ import annotations
 
 import flet as ft
 
-from ai_workers import content_mode, keyword_research
+from ai_workers import content_mode, keyword_research, formatting
 from core import repo
 from core.brand_seed import KIT_PRESETS
 
@@ -358,6 +358,27 @@ def _build_screen(page: ft.Page, state: AppState, render) -> ft.Control:
         rows=[{"term": k, "desc": v} for k, v in terminology.items()],
     )
 
+    # --- 원고 서식 (요청 4) ------------------------------------------------------
+    design_template = ft.Dropdown(
+        label="서식 템플릿", width=220,
+        value=existing.get("design_template") if existing.get("design_template") in formatting.TEMPLATES else formatting.DEFAULT_TEMPLATE,
+        options=[ft.DropdownOption(key=k, text=formatting.TEMPLATES[k]["label"]) for k in formatting.TEMPLATE_ORDER],
+    )
+    design_strength = ft.Dropdown(
+        label="서식 강도 (기본값)", width=220,
+        value=existing.get("design_strength") if existing.get("design_strength") in formatting.STRENGTHS else formatting.DEFAULT_STRENGTH,
+        options=[ft.DropdownOption(key=k, text=formatting.STRENGTHS[k]["label"]) for k in formatting.STRENGTH_ORDER],
+    )
+    design_captions = ft.Column(
+        [ft.Text(f"· {formatting.TEMPLATES[k]['label']} — {formatting.TEMPLATES[k]['desc']}", size=fs(12, scale),
+                 color=BRAND_COLORS["text_muted"]) for k in formatting.TEMPLATE_ORDER]
+        + [ft.Text("· 강도: " + " / ".join(f"{formatting.STRENGTHS[k]['label']} — {formatting.STRENGTHS[k]['desc']}"
+                                          for k in formatting.STRENGTH_ORDER), size=fs(12, scale), color=BRAND_COLORS["text_muted"]),
+           ft.Text("서식은 초안을 쓰는 같은 호출에서 함께 만들어져 비용이 거의 늘지 않습니다. 글마다 워크벤치에서 강도를 바꿀 수 있습니다.",
+                   size=fs(11, scale), color=BRAND_COLORS["text_muted"])],
+        spacing=2,
+    )
+
     # --- 기본 콘텐츠 모드 -------------------------------------------------------
     mode_keys = content_mode.ORDER
     saved_mode = existing.get("default_content_mode") or content_mode.DEFAULT_MODE
@@ -493,6 +514,8 @@ def _build_screen(page: ft.Page, state: AppState, render) -> ft.Control:
             keyword_weights=new_weights,
             non_target_keywords=new_non_targets,
             default_content_mode=mode_dropdown.value,
+            design_template=design_template.value,
+            design_strength=design_strength.value,
             few_shot_samples=few_shot_samples,
         )
 
@@ -591,6 +614,10 @@ def _build_screen(page: ft.Page, state: AppState, render) -> ft.Control:
             ft.Divider(),
             mode_dropdown,
             mode_captions,
+            ft.Divider(),
+            ft.Text("🎨 원고 서식", weight=ft.FontWeight.BOLD),
+            ft.Row([design_template, design_strength], spacing=10, wrap=True),
+            design_captions,
             ft.Divider(),
             ft.Text("🔍 SEO 키워드 (네이버 블로그 전용)", weight=ft.FontWeight.BOLD),
             ft.Text(

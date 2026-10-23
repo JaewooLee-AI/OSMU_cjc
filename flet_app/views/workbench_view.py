@@ -18,9 +18,10 @@ import time
 
 import flet as ft
 
-from ai_workers import content_mode, factsheet, vision
+from ai_workers import content_mode, factsheet, formatting, vision
 from ai_workers.content_writer import (
     LENGTH_MODES,
+    apply_format,
     enabled_channels,
     regenerate_sns,
     revise_content,
@@ -31,9 +32,10 @@ from core import repo, storage
 
 import flet_app.simulators as sim
 from flet_app.components.collapsible import collapsible
+from flet_app.components.date_field import date_field, time_field
 from flet_app.kit_picker import kit_dropdown
 from flet_app.state import AppState
-from flet_app.theme import BRAND_COLORS, fs
+from flet_app.theme import BRAND_COLORS, STATUS_LABELS, fs
 
 _STATUS_STYLES = {
     "success": ("#1B6E3C", "#E8F5E9"),
@@ -55,7 +57,8 @@ def _label(c: dict) -> str:
     icon = "📰" if c["source_type"] == "news" else "✍️"
     title = c.get("title") or c.get("source_title") or c.get("source_url") or "(제목 없음)"
     kit = f" · 🧵{c['brand_kit_name']}" if c.get("brand_kit_name") else ""
-    return f"{icon} {title[:40]}{kit} · {c['status']}"
+    when = f" · 📅{c['scheduled_date'][5:]}" if c.get("scheduled_date") else ""
+    return f"{icon} {title[:40]}{kit}{when} · {STATUS_LABELS.get(c['status'], c['status'])}"
 
 
 def _is_untouched_draft(c: dict) -> bool:
@@ -204,7 +207,8 @@ def build(page: ft.Page, state: AppState) -> ft.Control:
 
     def refresh_list(preferred_id: str | None = None, live: bool = True) -> None:
         campaigns = repo.list_campaigns()
-        editable = [c for c in campaigns if c["status"] != "published"]
+        # 게시 완료 글은 목록에 넣지 않지만, 대시보드·캘린더에서 그 글을 콕 집어 열었으면 보여 줍니다.
+        editable = [c for c in campaigns if c["status"] != "published" or c["id"] == preferred_id]
         lookup = {c["id"]: c for c in editable}
         options = list(lookup.keys())
 
@@ -350,6 +354,61 @@ def _build_campaign_editor(
     ]))
     controls.append(kit_notice)
 
+    # --- 일정 (📅 캘린더) -------------------------------------------------------
+    schedule_status = ft.Text("", size=fs(11, scale))
+    auto_at = campaign.get("auto_generate_at") or ""
+    date_tf, date_row = date_field(page, campaign.get("scheduled_date"), label="발행 예정일")
+    series_tf = ft.TextField(label="시리즈 (선택)", value=campaign.get("series_name") or "", width=180, dense=True)
+    auto_switch = ft.Switch(label="자동 작성 예약", value=bool(auto_at))
+    auto_date_tf, auto_date_row = date_field(page, auto_at[:10] or campaign.get("scheduled_date"), label="작성 날짜")
+    auto_time_tf, auto_time_row = time_field(page, auto_at[11:16] or "09:00", label="시각")
+    auto_box = ft.Row([auto_date_row, auto_time_row], spacing=6, visible=bool(auto_at), wrap=True)
+
+    def on_auto_toggle(e: ft.Event) -> None:
+        auto_box.visible = auto_switch.value
+        auto_box.update()
+
+    auto_switch.on_change = on_auto_toggle
+
+    def _save_schedule() -> dict:
+        auto_value = None
+        if auto_switch.value and (auto_date_tf.value or "").strip():
+            auto_value = f"{auto_date_tf.value.strip()} {(auto_time_tf.value or '09:00').strip()}"
+        return repo.set_campaign_schedule(
+            campaign_id, scheduled_date=date_tf.value, series_name=series_tf.value, auto_generate_at=auto_value,
+        )
+
+    def on_save_schedule(e: ft.Event) -> None:
+        saved = _save_schedule()
+        parts = [f"예정일 {saved['scheduled_date']}" if saved["scheduled_date"] else "예정일 없음"]
+        if saved["auto_generate_at"]:
+            parts.append(f"{saved['auto_generate_at']}에 자동 작성")
+        elif auto_switch.value:
+            parts.append("자동 작성 날짜를 읽지 못해 예약하지 않았습니다")
+        if (date_tf.value or "").strip() and not saved["scheduled_date"]:
+            parts.append("예정일 형식이 틀려 비웠습니다(YYYY-MM-DD)")
+        schedule_status.value = "📅 저장했습니다 — " + " · ".join(parts)
+        schedule_status.color = "#1B6E3C"
+        schedule_status.update()
+        if refresh_selector_label:
+            refresh_selector_label()
+
+    auto_help = (
+        "앱이 켜져 있는 동안 예약 시각이 지나면 메모(또는 뉴스 원문)로 초안을 자동으로 만들어 '초안 완료'로 둡니다. "
+        "앱이 꺼져 있었다면 다음에 켤 때 만듭니다. 사진이 필요한 글은 미리 올려 두세요. 발행은 자동으로 하지 않습니다."
+    )
+    if campaign.get("content"):
+        auto_help = "이미 초안이 있어 자동 작성은 하지 않습니다(예약은 초안이 없는 글에만 동작)."
+    controls += [
+        ft.Row([date_row, series_tf, auto_switch, ft.OutlinedButton("일정 저장", on_click=on_save_schedule)],
+               spacing=8, wrap=True, vertical_alignment=ft.CrossAxisAlignment.CENTER),
+        auto_box,
+        ft.Text(auto_help, size=fs(10, scale), color=BRAND_COLORS["text_muted"]),
+        schedule_status,
+    ]
+    if repo.is_overdue(campaign):
+        controls.append(_status_box(f"⚠️ 발행 예정일({campaign['scheduled_date']})이 지났는데 아직 게시되지 않았습니다.", scale, "warning"))
+
     if campaign.get("source_url"):
         controls.append(ft.Text(f"📰 원문: {campaign['source_url']}", size=fs(11, scale), color=BRAND_COLORS["text_muted"]))
     if campaign.get("source_title"):
@@ -406,6 +465,24 @@ def _build_campaign_editor(
         ft.Text("🎚️ 콘텐츠 모드", weight=ft.FontWeight.BOLD, size=fs(13, scale)),
         mode_group,
         mode_caption,
+    ]
+
+    # --- 원고 서식 강도 (요청 4) ------------------------------------------------
+    kit_design = formatting.resolve(None, brand_kit)
+    strength_group = ft.RadioGroup(
+        value=campaign.get("design_strength") or "",
+        content=ft.Row(
+            [ft.Radio(value="", label=f"킷 기본 ({formatting.STRENGTHS[kit_design['strength']]['label']})")]
+            + [ft.Radio(value=k, label=formatting.STRENGTHS[k]["label"]) for k in formatting.STRENGTH_ORDER],
+            wrap=True,
+        ),
+    )
+    controls += [
+        ft.Text(f"🎨 원고 서식 — 템플릿 {formatting.TEMPLATES[kit_design['template']]['label']} (🧵 브랜드 킷에서 변경)",
+                weight=ft.FontWeight.BOLD, size=fs(13, scale)),
+        strength_group,
+        ft.Text("소제목·굵게·형광·인용구·구분선·요약 박스를 초안과 같은 호출에서 함께 만듭니다. "
+                "컴플라이언스 검수는 서식 없는 본문 그대로 합니다.", size=fs(10, scale), color=BRAND_COLORS["text_muted"]),
     ]
 
     # --- 사진 업로드 -----------------------------------------------------------
@@ -518,8 +595,9 @@ def _build_campaign_editor(
     def on_save(e: ft.Event) -> None:
         repo.update_campaign(
             campaign_id, title=title_field.value.strip() or None, memo=memo_field.value,
-            content_mode=mode_group.value, **_collect_sheet_values(),
+            content_mode=mode_group.value, design_strength=strength_group.value or None, **_collect_sheet_values(),
         )
+        _save_schedule()
         gen_status.value = "💾 저장했습니다."
         gen_status.color = "#1B6E3C"
         gen_status.update()
@@ -553,8 +631,9 @@ def _build_campaign_editor(
     def on_generate(e: ft.Event) -> None:
         repo.update_campaign(
             campaign_id, title=title_field.value.strip() or None, memo=memo_field.value,
-            content_mode=mode_group.value, **_collect_sheet_values(),
+            content_mode=mode_group.value, design_strength=strength_group.value or None, **_collect_sheet_values(),
         )
+        _save_schedule()
 
         # LLM 호출은 몇 초~수십 초가 걸린다 — on_click은 Flet의 이벤트 루프
         # 위에서 그대로 실행되므로, 여기서 직접 블로킹 호출을 하면 그동안 앱
@@ -613,6 +692,9 @@ def _build_campaign_editor(
         page.run_thread(_work)
 
     generate_button.on_click = on_generate
+    budget_warning = repo.budget_message()
+    if budget_warning:
+        controls.append(_status_box(budget_warning, scale, "warning"))
     controls += [
         ft.Row([
             ft.OutlinedButton("💾 저장", on_click=on_save, expand=True),
@@ -627,6 +709,7 @@ def _build_campaign_editor(
         controls.append(ft.Divider())
         controls.append(ft.Text("✏️ 생성된 콘텐츠", weight=ft.FontWeight.BOLD, size=fs(14, scale)))
         controls.append(_build_channel_tabs(page, campaign, title_field, scale, reload, refresh_sim))
+        controls += _build_format_section(page, campaign, scale, reload, refresh_sim, strength_group)
 
         controls.append(ft.Divider())
 
@@ -750,17 +833,30 @@ def _build_channel_tabs(page: ft.Page, campaign: dict, title_field: ft.TextField
 
     # --- 네이버 본문 --------------------------------------------------------
     body_field = ft.TextField(
-        label="본문 ([IMAGE: 경로] 위치를 옮기면 사진 배치가 바뀝니다)",
+        label="본문 ([IMAGE: 경로] 위치를 옮기면 사진 배치가 바뀝니다 · **굵게** ==형광== ## 소제목 > 인용 --- 구분선을 직접 써도 됩니다)",
         value=campaign.get("content") or "", multiline=True, min_lines=14, max_lines=24, expand=True,
     )
     naver_tags_field = ft.TextField(label="발행 태그", value=" ".join(campaign.get("naver_hashtags") or []), expand=True)
     naver_status = ft.Text("", size=fs(12, scale), color="#1B6E3C")
 
     def on_save_naver(e: ft.Event) -> None:
-        body_changed = (body_field.value or "").strip() != (campaign.get("content") or "").strip()
+        body = body_field.value or ""
+        extra: dict = {}
+        if formatting.has_markup(body):
+            # 편집창에 직접 쓴 **굵게**·==형광==·## 소제목·> 인용·--- 은 서식 목록으로 옮기고 본문은 평문으로 둡니다.
+            body, typed = formatting.extract(body)
+            fmt = campaign.get("content_format") or {}
+            design = formatting.resolve(campaign.get("design_strength"), repo.get_campaign_brand_kit(campaign))
+            extra["content_format"] = formatting.finalize(
+                body, list(fmt.get("items") or []) + typed, fmt.get("strength") or design["strength"],
+                fmt.get("template") or design["template"], source=fmt.get("source") or "manual",
+            )
+            body_field.value = body
+            body_field.update()
+        body_changed = body.strip() != (campaign.get("content") or "").strip()
         repo.update_campaign(
-            campaign_id, title=title_field.value.strip() or None, content=body_field.value,
-            naver_hashtags=[t for t in naver_tags_field.value.split() if t.strip()],
+            campaign_id, title=title_field.value.strip() or None, content=body,
+            naver_hashtags=[t for t in naver_tags_field.value.split() if t.strip()], **extra,
         )
         if body_changed:
             repo.mark_sns_stale(campaign_id)
@@ -865,6 +961,7 @@ def _build_channel_tabs(page: ft.Page, campaign: dict, title_field: ft.TextField
             ft.Row([ft.FilledButton("본문 저장", on_click=on_save_naver), naver_status]),
             *collapsible("📋 복사해서 네이버에 직접 붙여넣기", ft.Column([
                 _copy_field("제목", title_field.value, page, scale),
+                _rich_copy_button(campaign, scale),
                 _copy_field("본문", body_field.value, page, scale, "[IMAGE: …] 자리에 해당 순서의 사진을 넣으면 됩니다"),
                 _copy_field("발행 태그", naver_tags_field.value, page, scale),
             ], spacing=8)),
@@ -1002,6 +1099,148 @@ def _build_channel_tabs(page: ft.Page, campaign: dict, title_field: ft.TextField
     )
 
 
+def _rich_copy_button(campaign: dict, scale: float) -> ft.Control:
+    """서식 포함 본문을 HTML로 클립보드에 넣습니다(Windows 전용 CF_HTML — core/clipboard_utils)."""
+    status = ft.Text("", size=fs(10, scale), color=BRAND_COLORS["text_muted"])
+
+    def on_copy(e: ft.Event) -> None:
+        from core.clipboard_utils import copy_html_to_clipboard
+
+        fresh = repo.get_campaign(campaign["id"]) or campaign
+        mode = (repo.get_app_state(formatting.NAVER_FORMAT_STATE_KEY) or {}).get("value") or formatting.DEFAULT_NAVER_FORMAT_MODE
+        ok = copy_html_to_clipboard(formatting.naver_full_html(fresh.get("content") or "", fresh.get("content_format"), mode))
+        status.value = ("✅ 서식 포함 본문을 복사했습니다. 네이버 에디터 본문에 붙여 넣고, [사진: …] 줄 자리에 사진을 넣으세요."
+                        if ok else "이 PC에서는 서식 포함 복사를 할 수 없어 글자만 복사됐을 수 있습니다(Windows에서 동작).")
+        status.update()
+
+    return ft.Column([
+        ft.OutlinedButton("🎨 서식 포함 본문 복사 (HTML)", icon=ft.Icons.CONTENT_COPY, on_click=on_copy),
+        status,
+    ], spacing=2)
+
+
+def _build_format_section(page: ft.Page, campaign: dict, scale: float, reload, refresh_sim, strength_group) -> list[ft.Control]:
+    """🎨 서식 — 붙은 서식 목록(지우기·굵게↔형광·인용구/구분선 모양), [서식 적용], [서식 모두 지우기]."""
+    campaign_id = campaign["id"]
+    content = campaign.get("content") or ""
+    fmt = campaign.get("content_format") or {}
+    items = fmt.get("items") or []
+    _blocks, unmatched = formatting.bind(content, fmt)
+    unmatched_ids = {i.get("id") for i in unmatched}
+    status = ft.Text("", size=fs(12, scale))
+    spinner = ft.ProgressRing(width=16, height=16, stroke_width=2, visible=False)
+
+    def save(new_fmt: dict) -> None:
+        repo.update_campaign(campaign_id, content_format=new_fmt)
+        reload()
+
+    rows: list[ft.Control] = []
+    for item in items:
+        iid = item.get("id")
+        kind = item.get("type")
+        text = item.get("text") or item.get("before") or item.get("caption") or item.get("start") or ""
+        if kind == "divider":
+            text = f"「{text[:30]}」 앞"
+        elif kind == "box":
+            text = f"「{(item.get('start') or '')[:20]}」 ~ 「{(item.get('end') or '')[:20]}」"
+        elif kind == "photo_hint":
+            text = f"{item.get('caption', '')}"
+        extras: list[ft.Control] = []
+        if kind in ("bold", "highlight"):
+            other = "highlight" if kind == "bold" else "bold"
+            extras.append(ft.TextButton(f"→ {formatting.type_label(other)}",
+                                        on_click=lambda e, iid=iid, other=other: save(formatting.update_item(fmt, iid, type=other))))
+        elif kind == "quote":
+            dd = ft.Dropdown(value=item.get("style") or "quote", width=130, dense=True,
+                             options=[ft.DropdownOption(key=k, text=v) for k, v in formatting.QUOTE_STYLES.items()])
+            dd.on_select = lambda e, iid=iid, dd=dd: save(formatting.update_item(fmt, iid, style=dd.value))
+            extras.append(dd)
+        elif kind == "divider":
+            dd = ft.Dropdown(value=item.get("style") or "line", width=120, dense=True,
+                             options=[ft.DropdownOption(key=k, text=v) for k, v in formatting.DIVIDER_STYLES.items()])
+            dd.on_select = lambda e, iid=iid, dd=dd: save(formatting.update_item(fmt, iid, style=dd.value))
+            extras.append(dd)
+        elif kind == "heading":
+            other = 3 if int(item.get("level") or 2) == 2 else 2
+            extras.append(ft.TextButton(f"→ H{other}", on_click=lambda e, iid=iid, other=other: save(formatting.update_item(fmt, iid, level=other))))
+        missing = iid in unmatched_ids
+        rows.append(ft.Row([
+            ft.Text(f"{formatting.type_label(kind)}" + (f" H{item.get('level')}" if kind == "heading" else ""),
+                    width=80, size=fs(11, scale), weight=ft.FontWeight.BOLD),
+            ft.Text(text[:60] + (" (본문에서 못 찾음 — 적용 안 됨)" if missing else ""), size=fs(11, scale), expand=True,
+                    color="#B3261E" if missing else None),
+            *extras,
+            ft.IconButton(icon=ft.Icons.DELETE_OUTLINE, icon_size=16, tooltip="이 서식 지우기",
+                          on_click=lambda e, iid=iid: save(formatting.remove_item(fmt, iid))),
+        ], spacing=6))
+
+    def on_apply(e: ft.Event) -> None:
+        apply_button.disabled = True
+        apply_button.update()
+        spinner.visible = True
+        spinner.update()
+        status.value = "⏳ 본문은 그대로 두고 서식만 고르는 중… (AI 호출 1회)"
+        status.color = BRAND_COLORS["text_muted"]
+        status.update()
+
+        def _work() -> None:
+            try:
+                apply_format(campaign_id, strength=strength_group.value or None)
+            except Exception as exc:  # noqa: BLE001
+                status.value = f"❌ 서식 적용 실패: {exc}"
+                status.color = "#B3261E"
+                spinner.visible = False
+                apply_button.disabled = False
+                spinner.update()
+                apply_button.update()
+                status.update()
+                return
+            status.value = "✅ 서식을 입혔습니다."
+            status.color = "#1B6E3C"
+            spinner.visible = False
+            spinner.update()
+            status.update()
+            time.sleep(0.8)
+            reload()
+
+        page.run_thread(_work)
+
+    def on_clear(e: ft.Event) -> None:
+        save({**fmt, "items": []})
+
+    busy = campaign.get("status") == "processing"
+    apply_button = ft.FilledButton("🎨 서식 다시 입히기" if items else "🎨 서식 적용 (재생성 없이)",
+                                   on_click=on_apply, disabled=busy,
+                                   tooltip="본문 글자는 바꾸지 않고 서식만 고릅니다. 위 '원고 서식' 강도를 씁니다.")
+    head = f"🎨 서식 {len(items)}개" + (f" · 적용 안 됨 {len(unmatched)}개" if unmatched else "")
+    body = ft.Column(
+        [
+            ft.Text("오른쪽 네이버 미리보기에 서식이 입혀져 보입니다. 여기서 서식을 지우거나 바꿀 수 있습니다. "
+                    "인용구·구분선 모양은 미리보기용이며, 네이버에서는 에디터에서 한 번 눌러 바꿉니다.",
+                    size=fs(10, scale), color=BRAND_COLORS["text_muted"]),
+            *(rows or [ft.Text("아직 서식이 없습니다.", size=fs(11, scale), color=BRAND_COLORS["text_muted"])]),
+            ft.Row([apply_button, *([ft.OutlinedButton("서식 모두 지우기", on_click=on_clear)] if items else []), spinner, status],
+                   spacing=8, wrap=True),
+        ],
+        spacing=6,
+    )
+    return [ft.Divider()] + collapsible(head, body, initially_open=not items)
+
+
+def cost_summary_text(cost: dict | None) -> str | None:
+    """'이 글 생성 비용 약 ○○원' 한 줄 (요청 3). 단가가 없는 호출이 섞이면 그렇다고 밝힙니다."""
+    if not cost or not cost.get("calls"):
+        return None
+    what = "이번 수정 비용" if cost.get("kind") == "revise" else ("서식 적용 비용" if cost.get("kind") == "format" else "이 글 생성 비용")
+    if cost.get("unpriced_calls") == cost.get("calls"):
+        return (f"💰 {what}: 단가 미등록 — AI 호출 {cost['calls']}회 · 토큰 {cost.get('input_tokens', 0) + cost.get('output_tokens', 0):,}개. "
+                "⚙️ 설정 → 📈 사용량에서 단가를 넣으면 금액으로 보입니다.")
+    text = f"💰 {what} 약 {cost.get('cost_krw', 0):,.0f}원 (${cost.get('cost_usd', 0):.4f}, AI 호출 {cost['calls']}회)"
+    if cost.get("unpriced_calls"):
+        text += f" — 단가 미등록 호출 {cost['unpriced_calls']}회는 빠져 있습니다"
+    return text + ". 예산 참고용 추정값입니다."
+
+
 def _build_report_controls(campaign: dict, scale: float) -> list[ft.Control]:
     report = campaign.get("guardrail_report")
     controls: list[ft.Control] = []
@@ -1037,6 +1276,11 @@ def _build_report_controls(campaign: dict, scale: float) -> list[ft.Control]:
     if not report:
         return controls
 
+    for key in ("cost", "format_cost"):
+        cost_line = cost_summary_text(report.get(key))
+        if cost_line:
+            controls.append(_status_box(cost_line, scale, "info"))
+
     body: list[ft.Control] = []
     if report.get("compliance_pass") is None:
         body.append(ft.Text("가드레일이 꺼진 상태로 생성되어 검수를 건너뛰었습니다.", size=fs(12, scale)))
@@ -1056,6 +1300,14 @@ def _build_report_controls(campaign: dict, scale: float) -> list[ft.Control]:
         for tip in report.get("suggestions") or []:
             body.append(ft.Text(f"💡 (위반 아님 · 보완 제안) {tip}", size=fs(11, scale)))
 
+    fmt_report = report.get("format")
+    if fmt_report and fmt_report.get("items"):
+        parts = ", ".join(f"{formatting.type_label(k)} {v}" for k, v in (fmt_report.get("counts") or {}).items())
+        body.append(ft.Text(
+            f"🎨 서식 {fmt_report['items']}개 ({parts})"
+            + (f" · 교정으로 자리를 잃어 뺀 서식 {fmt_report['dropped']}개" if fmt_report.get("dropped") else ""),
+            size=fs(11, scale),
+        ))
     used_mode = report.get("content_mode")
     if used_mode:
         body.append(ft.Text(f"🎚️ 생성 모드: {content_mode.label_of(used_mode)}", size=fs(11, scale)))

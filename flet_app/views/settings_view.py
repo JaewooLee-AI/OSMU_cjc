@@ -22,7 +22,7 @@ from __future__ import annotations
 
 import flet as ft
 
-from ai_workers import keyword_curator, keyword_research, vision
+from ai_workers import formatting, keyword_curator, keyword_research, vision
 from ai_workers.content_writer import SNS_CHANNELS, enabled_channels
 from ai_workers.multi_llm_router import (
     VENDORS,
@@ -1539,19 +1539,243 @@ def _build_vision_tab(scale: float) -> ft.Control:
     )
 
 
+# 단가 입력 칸 옆에 거는 각 벤더의 공식 가격 페이지. 단가는 여기서 확인해 직접 입력합니다.
+PRICE_PAGES = {
+    "google": "https://ai.google.dev/gemini-api/docs/pricing",
+    "openai": "https://openai.com/api/pricing/",
+    "anthropic": "https://www.anthropic.com/pricing",
+}
+
+
+def _won(value: float) -> str:
+    return f"{value:,.0f}원"
+
+
+def _usd(value: float) -> str:
+    return f"${value:,.4f}" if value < 1 else f"${value:,.2f}"
+
+
+def _money_card(label: str, summary: dict, scale: float) -> ft.Control:
+    note = f"{_usd(summary['cost_usd'])} · {summary['calls']:,}회"
+    if summary["unpriced_calls"]:
+        note += f" · 단가 미등록 {summary['unpriced_calls']:,}회 제외"
+    return stat_card(label, _won(summary["cost_krw"]), note, scale=scale)
+
+
+def _parse_amount(text: str | None) -> float | None:
+    cleaned = (text or "").replace(",", "").replace("원", "").replace("$", "").strip()
+    if not cleaned:
+        return None
+    return float(cleaned)
+
+
+def _build_cost_section(scale: float, rebuild) -> list[ft.Control]:
+    """요청 3: 단가 표 · 환율 · 월 예산 · 누적 금액 · 벤더·모델별 표."""
+    rate = repo.get_usd_krw()
+    budget = repo.get_monthly_budget_krw()
+    today, month, total = repo.cost_today(), repo.cost_this_month(), repo.cost_all_time()
+    posts = repo.generated_post_count()
+    status = ft.Text("", size=fs(12, scale))
+
+    def say(msg: str, ok: bool = True) -> None:
+        status.value = msg
+        status.color = "#1B6E3C" if ok else "#B3261E"
+        status.update()
+
+    # --- 환율 · 예산 ---
+    rate_field = ft.TextField(label="환율 (1달러 = ?원)", value=f"{rate:,.0f}", width=200, dense=True)
+    budget_field = ft.TextField(
+        label="월 예산 (원, 비우면 경고 끔)", value=f"{budget:,.0f}" if budget else "", width=240, dense=True,
+    )
+
+    def on_save_rate(e: ft.Event) -> None:
+        try:
+            repo.set_usd_krw(_parse_amount(rate_field.value) or 0)
+            repo.set_monthly_budget_krw(_parse_amount(budget_field.value))
+        except ValueError as exc:
+            say(f"저장하지 못했습니다: {exc}", ok=False)
+            return
+        rebuild("✅ 환율·예산을 저장했습니다. 금액은 지금 환율로 다시 계산해 보여 줍니다(달러 금액은 그대로).")
+
+    # --- 단가 표 ---
+    prices = {(p["vendor"], p["model"]): p for p in repo.list_model_prices()}
+    rows: list[ft.Control] = []
+
+    def price_row(vendor: str, model: str) -> ft.Control:
+        price = prices.get((vendor, model))
+
+        def fmt(v):
+            return "" if v is None else f"{v:g}"
+
+        f_in = ft.TextField(label="입력 $/100만", value=fmt(price and price["input_per_mtok"]), width=130, dense=True)
+        f_out = ft.TextField(label="출력 $/100만", value=fmt(price and price["output_per_mtok"]), width=130, dense=True)
+        f_cache = ft.TextField(
+            label="캐시 입력 $/100만", value=fmt(price and price["cached_input_per_mtok"]), width=150, dense=True,
+            tooltip="비우면 캐시에서 읽은 입력도 일반 입력 단가로 계산합니다.",
+        )
+
+        def on_save(e: ft.Event) -> None:
+            try:
+                p_in, p_out = _parse_amount(f_in.value), _parse_amount(f_out.value)
+                p_cache = _parse_amount(f_cache.value)
+                if p_in is None or p_out is None:
+                    raise ValueError("입력·출력 단가를 모두 넣어주세요.")
+                filled = repo.save_model_price(vendor, model, p_in, p_out, p_cache)
+            except ValueError as exc:
+                say(f"{model}: {exc}", ok=False)
+                return
+            extra = f" 단가가 없던 지난 기록 {filled:,}건을 이 단가로 채웠습니다." if filled else ""
+            rebuild(f"✅ {model} 단가를 저장했습니다.{extra} 앞으로의 호출은 호출할 때의 단가로 계산합니다.")
+
+        def on_delete(e: ft.Event) -> None:
+            repo.delete_model_price(vendor, model)
+            rebuild(f"{model} 단가를 지웠습니다. 이미 계산된 지난 금액은 그대로입니다.")
+
+        async def on_open_pricing(e: ft.Event) -> None:
+            if vendor in PRICE_PAGES:
+                await ft.UrlLauncher().launch_url(PRICE_PAGES[vendor])
+
+        label = VENDORS.get(vendor, {}).get("label", vendor)
+        return ft.Row([
+            ft.Column([
+                ft.Text(model, weight=ft.FontWeight.BOLD, size=fs(12, scale)),
+                ft.Text(label + ("" if price else " · 단가 미등록"), size=fs(10, scale),
+                        color=BRAND_COLORS["text_muted"] if price else "#B3261E"),
+            ], spacing=0, width=220),
+            f_in, f_out, f_cache,
+            ft.FilledButton("저장", on_click=on_save),
+            *([ft.IconButton(icon=ft.Icons.DELETE_OUTLINE, tooltip="단가 지우기", on_click=on_delete)] if price else []),
+            *([ft.TextButton("공식 가격 보기", icon=ft.Icons.OPEN_IN_NEW, on_click=on_open_pricing)]
+              if vendor in PRICE_PAGES else []),
+        ], spacing=8, wrap=True)
+
+    for m in repo.usage_models():
+        rows.append(price_row(m["vendor"], m["model"]))
+    if not rows:
+        rows.append(ft.Text("아직 등록된 모델이 없습니다. 🔑 LLM 벤더 탭에서 모델을 등록하면 여기에 나옵니다.",
+                            size=fs(11, scale), color=BRAND_COLORS["text_muted"]))
+
+    new_vendor = ft.Dropdown(
+        label="벤더", width=180, dense=True, value="google",
+        options=[ft.DropdownOption(key=k, text=v["label"]) for k, v in VENDORS.items()],
+    )
+    new_model = ft.TextField(label="모델 이름 (호출 기록과 똑같이)", width=260, dense=True)
+
+    def on_add_model(e: ft.Event) -> None:
+        if not (new_model.value or "").strip():
+            say("모델 이름을 적어주세요.", ok=False)
+            return
+        rows.insert(len(rows), price_row(new_vendor.value, new_model.value.strip()))
+        price_box.controls = list(rows)
+        price_box.update()
+        say("아래 줄에 단가를 넣고 [저장]을 누르세요.")
+
+    price_box = ft.Column(list(rows), spacing=6)
+
+    # --- 벤더·모델별 표 ---
+    by_model = repo.cost_by_model()
+    if by_model:
+        model_table: ft.Control = ft.DataTable(
+            columns=[ft.DataColumn(ft.Text(c)) for c in ("벤더", "모델", "호출 수", "입력 토큰", "캐시 입력", "출력 토큰", "금액")],
+            rows=[
+                ft.DataRow(cells=[
+                    ft.DataCell(ft.Text(VENDORS.get(r["vendor"] or "", {}).get("label", r["vendor"] or "-"))),
+                    ft.DataCell(ft.Text(r["model"] or "-")),
+                    ft.DataCell(ft.Text(f"{r['calls']:,}")),
+                    ft.DataCell(ft.Text(f"{r['input_tokens']:,}")),
+                    ft.DataCell(ft.Text(f"{r['cached_input_tokens']:,}")),
+                    ft.DataCell(ft.Text(f"{r['output_tokens']:,}")),
+                    ft.DataCell(ft.Text(
+                        ("단가 미등록" if r["unpriced_calls"] == r["calls"] else
+                         f"{_won(r['cost_krw'])} ({_usd(r['cost_usd'])})"
+                         + (f" · 미등록 {r['unpriced_calls']}회" if r["unpriced_calls"] else "")),
+                        color="#B3261E" if r["unpriced_calls"] else None,
+                    )),
+                ])
+                for r in by_model
+            ],
+        )
+    else:
+        model_table = ft.Text("아직 호출 기록이 없습니다.", color=BRAND_COLORS["text_muted"])
+
+    avg = (total["cost_krw"] / posts) if posts else 0
+    budget_msg = repo.budget_message()
+    controls: list[ft.Control] = [
+        ft.Text("💰 AI 사용 금액 (추정)", weight=ft.FontWeight.BOLD, size=fs(16, scale)),
+        ft.Container(
+            content=ft.Text(
+                "예산 참고용 추정값입니다 — 등록한 단가와 환율로 계산합니다. 실제 청구 금액은 각 벤더 콘솔에서 확인하세요. "
+                "단가가 등록되지 않은 모델의 호출은 0원이 아니라 '단가 미등록'으로 따로 셉니다. "
+                "캐시 입력 단가를 비워 두면 캐시에서 읽은 입력도 일반 입력 단가로 계산합니다.",
+                size=fs(11, scale), color=BRAND_COLORS["text_muted"],
+            ),
+            bgcolor="#F3F1EC", padding=10, border_radius=8,
+        ),
+    ]
+    if budget_msg:
+        controls.append(ft.Container(
+            content=ft.Text(budget_msg, size=fs(12, scale), color="#8A6D3B"),
+            bgcolor="#FFF6E5", padding=10, border_radius=8,
+        ))
+    budget_note = ""
+    if budget:
+        used = repo.budget_status()
+        budget_note = f"월 예산 {_won(budget)} 중 {used['ratio'] * 100:.0f}% 사용"
+    controls += [
+        ft.Row([
+            _money_card("오늘", today, scale),
+            _money_card("이번 달", month, scale),
+            _money_card("전체 누적", total, scale),
+            stat_card("글 1건당 평균", _won(avg) if posts else "-", f"생성 완료된 글 {posts:,}건 기준", scale=scale),
+        ], spacing=12, wrap=True),
+        *([ft.Text(budget_note, size=fs(12, scale))] if budget_note else []),
+        ft.Row([rate_field, budget_field, ft.FilledButton("환율·예산 저장", on_click=on_save_rate)], spacing=8, wrap=True),
+        ft.Text(f"환율 기본값은 {repo.DEFAULT_USD_KRW:,.0f}원입니다 — 실제 환율로 고쳐 쓰세요. 월 예산의 "
+                f"{'%·'.join(str(x) for x in repo.BUDGET_WARN_LEVELS)}%에 이르면 대시보드·워크벤치에 안내합니다(생성을 막지는 않음).",
+                size=fs(10, scale), color=BRAND_COLORS["text_muted"]),
+        status,
+        ft.Divider(),
+        ft.Text("단가 표 (100만 토큰당 USD)", weight=ft.FontWeight.BOLD, size=fs(14, scale)),
+        ft.Text("단가는 자주 바뀌므로 기본값을 넣어 두지 않았습니다. [공식 가격 보기]에서 확인해 넣으세요. "
+                "이미지 분석도 입력 토큰으로 계산합니다. 처음 단가를 넣으면 그 모델의 지난 기록(금액 없음)을 이 단가로 한 번 채웁니다.",
+                size=fs(11, scale), color=BRAND_COLORS["text_muted"]),
+        price_box,
+        ft.Row([new_vendor, new_model, ft.OutlinedButton("모델 줄 추가", on_click=on_add_model)], spacing=8, wrap=True),
+        ft.Divider(),
+        ft.Text("벤더·모델별 사용량", weight=ft.FontWeight.BOLD, size=fs(14, scale)),
+        ft.Column([model_table], scroll=ft.ScrollMode.AUTO),
+        ft.Divider(),
+    ]
+    return controls
+
+
 def _build_usage_tab(scale: float) -> ft.Control:
+    root = ft.Container()
+
+    def rebuild(message: str | None = None) -> None:
+        root.content = _usage_tab_body(scale, rebuild, message)
+        root.update()
+
+    root.content = _usage_tab_body(scale, rebuild, None)
+    return root
+
+
+def _usage_tab_body(scale: float, rebuild, message: str | None) -> ft.Control:
     totals = repo.usage_totals()
     spent = totals["input_tokens"] + totals["output_tokens"]
     saved = totals["saved_tokens"]
+    saved_money = repo.cost_all_time()["saved_cost_krw"]
 
     stats = ft.Row(
         [
             stat_card("총 입력 토큰", f"{totals['input_tokens']:,}", scale=scale),
             stat_card("총 출력 토큰", f"{totals['output_tokens']:,}", scale=scale),
-            stat_card("절약된 토큰", f"{saved:,}", "캐시 적중 + 해상도 축소 + 배치", scale=scale),
+            stat_card("절약된 토큰", f"{saved:,}",
+                      "캐시 적중 + 해상도 축소 + 배치" + (f" · 약 {_won(saved_money)}(추정)" if saved_money else ""),
+                      scale=scale),
             stat_card("캐시 적중", f"{totals['cache_hits']:,}", f"분석한 사진 {totals['images']:,}장", scale=scale),
         ],
-        spacing=12,
+        spacing=12, wrap=True,
     )
 
     progress_section: list[ft.Control] = []
@@ -1563,13 +1787,21 @@ def _build_usage_tab(scale: float) -> ft.Control:
         ]
 
     recent = repo.recent_usage(50)
+    rate = repo.get_usd_krw()
     if recent:
-        columns = ["시각", "종류", "벤더", "모델", "사진", "입력", "출력", "절약", "메모"]
-        keys = ["ts", "kind", "vendor", "model", "image_count", "est_input_tokens", "est_output_tokens", "est_saved_tokens", "note"]
+        columns = ["시각", "종류", "벤더", "모델", "사진", "입력", "캐시", "출력", "절약", "금액", "메모"]
+        def cell(row, k):
+            if k == "cost":
+                if row.get("cost_usd") is None:
+                    return "단가 미등록" if (row.get("est_input_tokens") or row.get("est_output_tokens")) else ""
+                return _won(row["cost_usd"] * rate)
+            return str(row.get(k) or "")
+        keys = ["ts", "kind", "vendor", "model", "image_count", "est_input_tokens", "cached_input_tokens",
+                "est_output_tokens", "est_saved_tokens", "cost", "note"]
         usage_table = ft.DataTable(
             columns=[ft.DataColumn(ft.Text(c)) for c in columns],
             rows=[
-                ft.DataRow(cells=[ft.DataCell(ft.Text(str(row.get(k) or ""))) for k in keys])
+                ft.DataRow(cells=[ft.DataCell(ft.Text(cell(row, k))) for k in keys])
                 for row in recent
             ],
         )
@@ -1577,13 +1809,20 @@ def _build_usage_tab(scale: float) -> ft.Control:
     else:
         usage_section = ft.Text("아직 호출 기록이 없습니다.", color=BRAND_COLORS["text_muted"])
 
+    cost_controls = _build_cost_section(scale, rebuild)
+    if message:
+        cost_controls.insert(1, ft.Text(message, size=fs(12, scale), color="#1B6E3C"))
+
     return ft.Column(
         [
+            *cost_controls,
+            ft.Text("📈 토큰 사용량", weight=ft.FontWeight.BOLD, size=fs(16, scale)),
             stats,
             *progress_section,
             ft.Text(
-                "입력/출력 토큰은 각 프로바이더가 응답에 실어 보낸 실제 usage 값입니다. "
-                "절약분은 저장된 사진을 축소·캐시·배치 없이 그대로 보냈을 때와의 차이입니다.",
+                "입력/출력 토큰은 각 프로바이더가 응답에 실어 보낸 실제 usage 값입니다(응답에 없으면 글자 수로 추정). "
+                "캐시는 입력 토큰 중 프롬프트 캐시에서 읽은 양으로, 이 기능을 넣은 뒤의 기록부터 따로 셉니다. "
+                "절약분은 저장된 사진을 축소·캐시·배치 없이 그대로 보냈을 때와의 차이(추정)입니다.",
                 size=fs(11, scale),
                 color=BRAND_COLORS["text_muted"],
             ),
@@ -1595,6 +1834,32 @@ def _build_usage_tab(scale: float) -> ft.Control:
         scroll=ft.ScrollMode.AUTO,
         expand=True,
     )
+
+
+def _naver_format_controls(scale: float) -> list[ft.Control]:
+    """🎨 네이버 서식 붙여넣기 방식 (요청 4). 에디터가 HTML 인용·구분선·표를 살리지 않으면 기호로 바꿉니다."""
+    saved = (repo.get_app_state(formatting.NAVER_FORMAT_STATE_KEY) or {}).get("value") or formatting.DEFAULT_NAVER_FORMAT_MODE
+    group = ft.RadioGroup(value=saved, content=ft.Column([
+        ft.Radio(value="editor", label="에디터 서식 우선 — 인용구·구분선·요약 박스를 HTML 서식으로 붙여 넣습니다"),
+        ft.Radio(value="symbol", label="기호로 대체 — 인용구는 ❝ ❞, 구분선은 ────, 요약 박스는 📌 제목 + 선으로 넣습니다"),
+    ], spacing=2))
+    status = ft.Text("", size=fs(12, scale))
+
+    def on_save(e: ft.Event) -> None:
+        repo.set_app_state(formatting.NAVER_FORMAT_STATE_KEY, {"value": group.value})
+        status.value = f"✅ 저장했습니다 — {formatting.NAVER_FORMAT_MODES[group.value]}. 다음 [지금 게시]부터 적용됩니다."
+        status.color = "#1B6E3C"
+        status.update()
+
+    return [
+        ft.Text("🎨 네이버 서식 붙여넣기", weight=ft.FontWeight.BOLD, size=fs(14, scale)),
+        ft.Text("굵게·형광·소제목·목록은 어느 쪽이든 서식으로 붙여 넣습니다. 스마트에디터가 인용구·구분선·표를 "
+                "제대로 바꾸지 못하면 '기호로 대체'를 고르세요. 인용구·구분선 모양(따옴표형·선형 등)은 에디터 툴바에서만 "
+                "고를 수 있어 자동으로 바꾸지 않습니다.", size=fs(11, scale), color=BRAND_COLORS["text_muted"]),
+        group,
+        ft.FilledButton("서식 방식 저장", on_click=on_save),
+        status,
+    ]
 
 
 def _build_channels_tab(scale: float) -> ft.Control:
@@ -1631,6 +1896,8 @@ def _build_channels_tab(scale: float) -> ft.Control:
             *checks.values(),
             ft.FilledButton("저장", on_click=on_save),
             status,
+            ft.Divider(),
+            *_naver_format_controls(scale),
         ],
         spacing=10,
         scroll=ft.ScrollMode.AUTO,

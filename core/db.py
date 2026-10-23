@@ -149,6 +149,21 @@ create table if not exists campaigns (
     naver_hashtags      text not null default '[]',
     shorts_script       text,
     publish_error       text,
+    -- 게시 기록. published_url은 실제 네이버 글 주소(수동 입력 또는 발행 후 자동 감지),
+    -- published_at은 앱에서 게시 완료로 처리한 시각입니다.
+    published_url       text,
+    published_at        text,
+    -- 📅 캘린더. scheduled_date는 'YYYY-MM-DD'(발행 예정일), auto_generate_at은
+    -- 'YYYY-MM-DD HH:MM'(로컬 시각) — 앱이 켜져 있을 때 그 시각이 지나면 초안을 자동 생성합니다.
+    scheduled_date      text,
+    series_name         text,
+    auto_generate_at    text,
+    -- 원고 서식 레이어 (ai_workers/formatting.py). 본문(content)은 평문 그대로 두고,
+    -- 굵게·인용구·구분선 같은 서식은 "어느 문장에 무엇을" 식으로 여기 따로 둡니다 —
+    -- 검수·SEO·교정 단계가 평문을 전제로 돌기 때문입니다.
+    content_format      text not null default '{}',
+    -- 'none' | 'minimal' | 'standard' | 'rich'; null = 킷의 design_strength.
+    design_strength     text,
     created_at          text not null default (datetime('now')),
     updated_at          text not null default (datetime('now'))
 );
@@ -276,7 +291,59 @@ create table if not exists usage_log (
     est_input_tokens    integer not null default 0,
     est_output_tokens   integer not null default 0,
     est_saved_tokens    integer not null default 0,
-    note                text
+    note                text,
+    -- 어느 글의 호출인지 (생성·수정·SNS 재생성 중일 때만; 그 밖의 호출은 비어 있음).
+    campaign_id         text,
+    -- 입력 토큰 중 캐시에서 읽은 양 (est_input_tokens에 포함된 값).
+    cached_input_tokens integer not null default 0,
+    -- 호출 시점의 단가(model_prices)로 계산한 금액. 단가가 없으면 null = '단가 미등록'.
+    -- 단가를 나중에 바꿔도 이미 계산한 금액은 바뀌지 않습니다.
+    cost_usd            real,
+    saved_cost_usd      real
+);
+
+-- 벤더·모델별 단가 (100만 토큰당 USD). 관리자가 ⚙️ 설정 → 📈 사용량에서 입력합니다.
+-- 기본값을 넣지 않습니다: 가격은 자주 바뀌고, 지어낸 값으로 계산하면 안 됩니다.
+create table if not exists model_prices (
+    vendor                  text not null,
+    model                   text not null,
+    input_per_mtok          real not null,
+    output_per_mtok         real not null,
+    -- 비우면 캐시 입력도 일반 입력 단가로 계산합니다.
+    cached_input_per_mtok   real,
+    updated_at              text not null default (datetime('now')),
+    primary key (vendor, model)
+);
+
+-- 📅 캘린더의 '쓸 주제' 목록. 글로 만들면 campaign_id가 채워집니다. 글을 지워도 주제는
+-- 남고 연결만 끊깁니다(campaign_id = null). rule_id는 반복 규칙이 만든 자리입니다.
+create table if not exists topics (
+    id              integer primary key autoincrement,
+    title           text not null default '',
+    memo            text,
+    brand_kit_id    integer,
+    content_mode    text,
+    planned_date    text,
+    series_name     text,
+    campaign_id     text,
+    rule_id         integer,
+    created_at      text not null default (datetime('now')),
+    updated_at      text not null default (datetime('now'))
+);
+
+create index if not exists topics_planned_idx on topics (planned_date);
+create unique index if not exists topics_rule_date_idx on topics (rule_id, planned_date) where rule_id is not null;
+
+-- 반복 규칙: "매주 화요일 · 가발관리 킷 · 균형 모드". weekday는 0=월 … 6=일.
+create table if not exists schedule_rules (
+    id              integer primary key autoincrement,
+    weekday         integer not null check (weekday between 0 and 6),
+    brand_kit_id    integer,
+    content_mode    text,
+    title           text not null default '',
+    series_name     text,
+    is_active       integer not null default 1,
+    created_at      text not null default (datetime('now'))
 );
 """
 
@@ -310,6 +377,10 @@ create table if not exists {table} (
     non_target_keywords       text not null default '[]',
     -- Fallback for campaigns.content_mode — see ai_workers/content_mode.py.
     default_content_mode      text not null default 'balanced',
+    -- 원고 서식 기본값 (ai_workers/formatting.py): 템플릿 'basic' | 'info' | 'review',
+    -- 강도 'none' | 'minimal' | 'standard' | 'rich'.
+    design_template           text not null default 'basic',
+    design_strength           text not null default 'standard',
     created_at                text not null default (datetime('now')),
     updated_at                text not null default (datetime('now'))
 );
@@ -369,8 +440,34 @@ _ADDED_COLUMNS = {
         "product_fields": "text not null default '{}'",
         "brand_kit_id": "integer",
         "brand_kit_name": "text",
+        "published_url": "text",
+        "published_at": "text",
+        "scheduled_date": "text",
+        "series_name": "text",
+        "auto_generate_at": "text",
+        "content_format": "text not null default '{}'",
+        "design_strength": "text",
+    },
+    "usage_log": {
+        "campaign_id": "text",
+        "cached_input_tokens": "integer not null default 0",
+        "cost_usd": "real",
+        "saved_cost_usd": "real",
+    },
+    "brand_kit": {
+        "design_template": "text not null default 'basic'",
+        "design_strength": "text not null default 'standard'",
     },
 }
+
+# 새 컬럼에 거는 인덱스는 SCHEMA에 둘 수 없습니다 — SCHEMA가 먼저 실행되는데, 예전 DB에는
+# 그 시점에 컬럼이 아직 없습니다. 컬럼을 추가한 뒤에 만듭니다.
+_ADDED_INDEXES = (
+    "create index if not exists campaigns_scheduled_idx on campaigns (scheduled_date)",
+    "create index if not exists campaigns_autogen_idx on campaigns (auto_generate_at)",
+    "create index if not exists usage_log_campaign_idx on usage_log (campaign_id)",
+    "create index if not exists usage_log_ts_idx on usage_log (ts)",
+)
 
 # 예전 한 줄짜리 brand_kit에서 회사 공통 값과 앱 설정으로 옮겨 가는 컬럼.
 _COMPANY_COLUMNS = (
@@ -396,6 +493,8 @@ def _migrate(conn: sqlite3.Connection) -> None:
             if name not in existing:
                 conn.execute(f"alter table {table} add column {name} {decl}")
                 print(f"[db] migrated: {table}.{name} 컬럼 추가")
+    for ddl in _ADDED_INDEXES:
+        conn.execute(ddl)
     _migrate_single_brand_kit(conn)
 
 

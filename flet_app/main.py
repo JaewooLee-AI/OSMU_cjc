@@ -59,8 +59,10 @@ from core.db import init_db  # noqa: E402
 
 from flet_app.state import FONT_SCALE_STATE_KEY, AppState  # noqa: E402
 from flet_app.theme import DEFAULT_FONT_SCALE, build_theme  # noqa: E402
+from ai_workers import auto_scheduler  # noqa: E402
 from flet_app.views import (  # noqa: E402
     brand_kit_view,
+    calendar_view,
     dashboard_view,
     naver_publish_view,
     news_curation_view,
@@ -72,12 +74,13 @@ from flet_app.views import (  # noqa: E402
 DESTINATIONS = [
     (ft.Icons.DASHBOARD_OUTLINED, ft.Icons.DASHBOARD, "대시보드", dashboard_view),
     (ft.Icons.EDIT_OUTLINED, ft.Icons.EDIT, "워크벤치", workbench_view),
+    (ft.Icons.CALENDAR_MONTH_OUTLINED, ft.Icons.CALENDAR_MONTH, "캘린더", calendar_view),
     (ft.Icons.ARTICLE_OUTLINED, ft.Icons.ARTICLE, "뉴스 큐레이션", news_curation_view),
     (ft.Icons.STYLE_OUTLINED, ft.Icons.STYLE, "브랜드 킷", brand_kit_view),
     (ft.Icons.SEND_OUTLINED, ft.Icons.SEND, "네이버 게시", naver_publish_view),
     (ft.Icons.SETTINGS_OUTLINED, ft.Icons.SETTINGS, "설정 · 토큰", settings_view),
 ]
-DEFAULT_INDEX = 3  # 🧵 브랜드 킷
+DEFAULT_INDEX = 4  # 🧵 브랜드 킷
 WORKBENCH_INDEX = 1  # DESTINATIONS 안 "워크벤치" 위치 — state.navigate_to_workbench가 씀
 
 
@@ -165,6 +168,19 @@ def main(page: ft.Page) -> None:
     page.window.title = f"{company.get('sub_brand') or ''} OSMU 워크벤치".strip()
 
     show(DEFAULT_INDEX)
+
+    # 📅 자동 작성 예약 — 앱이 켜져 있는 동안 1분마다 확인합니다(ai_workers/auto_scheduler.py).
+    # 꺼져 있던 동안 지난 예약은 첫 확인에서 바로 처리됩니다.
+    def on_auto_done(campaign: dict, error: str | None) -> None:
+        title = campaign.get("title") or "(제목 없음)"
+        message = (f"⏰ 자동 작성 실패 — {title}: {error}" if error
+                   else f"⏰ 예약한 글의 초안을 자동으로 만들었습니다 — {title}. 워크벤치에서 검수 후 게시하세요.")
+        try:
+            page.show_dialog(ft.SnackBar(ft.Text(message), duration=8000))
+        except Exception:  # noqa: BLE001 — 알림을 못 띄워도 생성 결과는 DB에 있음
+            pass
+
+    auto_scheduler.start(on_done=on_auto_done)
 
 
 if __name__ == "__main__":

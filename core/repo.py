@@ -7,8 +7,11 @@ from every caller.
 """
 from __future__ import annotations
 
+import contextvars
 import uuid
-from typing import Any, Dict, List, Optional
+from contextlib import contextmanager
+from datetime import date, datetime, timedelta
+from typing import Any, Dict, Iterator, List, Optional
 
 from core.db import (
     _APP_SETTINGS_COLUMNS,
@@ -31,6 +34,7 @@ _CAMPAIGN_JSON_COLS = {
     "x_hashtags": [],
     "naver_hashtags": [],
     "shorts_script": None,
+    "content_format": {},
 }
 
 _BRAND_KIT_JSON_COLS = {
@@ -53,7 +57,7 @@ _APP_SETTINGS_BOOL_COLS = ("vision_enabled",)
 BRAND_KIT_FIELDS = (
     "name", "industry", "persona", "tone_and_manner", "core_facts", "few_shot_samples",
     "terminology", "seo_keywords", "keyword_weights", "non_target_keywords",
-    "default_content_mode",
+    "default_content_mode", "design_template", "design_strength",
 )
 # 킷을 복제할 때 옮기는 값 — 이름만 빼고 전부.
 _KIT_COPY_FIELDS = tuple(f for f in BRAND_KIT_FIELDS if f != "name")
@@ -560,6 +564,50 @@ def mark_sns_stale(campaign_id: str) -> None:
 def delete_campaign(campaign_id: str) -> None:
     with get_conn() as conn:
         conn.execute("delete from campaigns where id = ?", (campaign_id,))
+        # 주제 목록의 주제는 남기고 연결만 끊습니다 — 다시 [글로 만들기]를 할 수 있게.
+        conn.execute("update topics set campaign_id = null, updated_at = datetime('now') where campaign_id = ?",
+                     (campaign_id,))
+
+
+def mark_published(campaign_id: str, url: Optional[str] = None) -> None:
+    """게시 완료로 바꾸고 게시 시각을 남깁니다. `url`이 있으면 네이버 글 주소도 저장합니다.
+
+    이미 게시 완료인 글을 다시 게시한 경우에도 시각은 이번 게시로 갱신합니다.
+    """
+    fields: Dict[str, Any] = {
+        "status": "published",
+        "publish_error": None,
+        "published_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+    }
+    cleaned = normalize_post_url(url)
+    if cleaned:
+        fields["published_url"] = cleaned
+    update_campaign(campaign_id, **fields)
+
+
+def normalize_post_url(url: Optional[str]) -> Optional[str]:
+    """담당자가 붙여 넣은 주소를 정리합니다. 주소처럼 보이지 않으면 None."""
+    cleaned = (url or "").strip()
+    if not cleaned:
+        return None
+    if not cleaned.lower().startswith(("http://", "https://")):
+        if cleaned.lower().startswith(("blog.naver.com", "m.blog.naver.com")):
+            cleaned = "https://" + cleaned
+        else:
+            return None
+    return cleaned
+
+
+def set_published_url(campaign_id: str, url: Optional[str]) -> bool:
+    """게시 완료 글의 주소를 고칩니다. 빈 값이면 지웁니다. 주소 형식이 아니면 False."""
+    if not (url or "").strip():
+        update_campaign(campaign_id, published_url=None)
+        return True
+    cleaned = normalize_post_url(url)
+    if not cleaned:
+        return False
+    update_campaign(campaign_id, published_url=cleaned)
+    return True
 
 
 def reset_generated_content() -> Dict[str, int]:
@@ -586,6 +634,7 @@ def reset_generated_content() -> Dict[str, int]:
         conn.execute("delete from campaigns")
         conn.execute("delete from assets")
         conn.execute("delete from title_history")
+        conn.execute("update topics set campaign_id = null where campaign_id is not null")
     return counts
 
 
@@ -882,6 +931,53 @@ def naver_calls_today() -> int:
 
 # --- usage log --------------------------------------------------------------
 
+# 지금 돌고 있는 생성 작업의 글 ID. content_writer가 usage_scope()로 감싸 두면, 그 안에서
+# 일어난 LLM 호출이 어느 글의 비용인지 기록됩니다. 스레드풀로 넘길 때는 호출하는 쪽이
+# contextvars.copy_context()로 넘겨야 합니다(ThreadPoolExecutor는 컨텍스트를 물려주지 않음).
+_USAGE_CAMPAIGN: contextvars.ContextVar = contextvars.ContextVar("usage_campaign", default=None)
+
+
+@contextmanager
+def usage_scope(campaign_id: Optional[str]) -> Iterator[None]:
+    token = _USAGE_CAMPAIGN.set(campaign_id)
+    try:
+        yield
+    finally:
+        _USAGE_CAMPAIGN.reset(token)
+
+
+def current_usage_campaign() -> Optional[str]:
+    return _USAGE_CAMPAIGN.get()
+
+
+def _price_row(conn, vendor: Optional[str], model: Optional[str]):
+    if not vendor or not model:
+        return None
+    return conn.execute(
+        "select * from model_prices where vendor = ? and model = ?", (vendor, model)
+    ).fetchone()
+
+
+def compute_cost_usd(price, input_tokens: int, output_tokens: int, cached_input_tokens: int = 0) -> Optional[float]:
+    """100만 토큰당 단가로 계산한 금액. 단가가 없으면 None ('단가 미등록' — 0원이 아닙니다).
+
+    `input_tokens`는 캐시 입력을 포함한 전체 입력입니다. 캐시 단가가 비어 있으면
+    캐시 입력도 일반 입력 단가로 셉니다.
+    """
+    if price is None:
+        return None
+    cached = max(0, min(int(cached_input_tokens or 0), int(input_tokens or 0)))
+    fresh = max(0, int(input_tokens or 0) - cached)
+    cached_rate = price["cached_input_per_mtok"]
+    if cached_rate is None:
+        cached_rate = price["input_per_mtok"]
+    return (
+        fresh * price["input_per_mtok"]
+        + cached * cached_rate
+        + int(output_tokens or 0) * price["output_per_mtok"]
+    ) / 1_000_000
+
+
 def log_usage(
     kind: str,
     vendor: Optional[str] = None,
@@ -892,17 +988,252 @@ def log_usage(
     est_output_tokens: int = 0,
     est_saved_tokens: int = 0,
     note: Optional[str] = None,
+    cached_input_tokens: int = 0,
+    campaign_id: Optional[str] = None,
 ) -> None:
+    campaign_id = campaign_id or current_usage_campaign()
     with get_conn() as conn:
+        price = _price_row(conn, vendor, model)
+        cost = compute_cost_usd(price, est_input_tokens, est_output_tokens, cached_input_tokens)
+        # 절감 토큰은 '안 보낸 입력'이라 입력 단가로 셉니다.
+        saved_cost = (est_saved_tokens * price["input_per_mtok"] / 1_000_000) if (price and est_saved_tokens) else None
         conn.execute(
             """
             insert into usage_log (kind, vendor, model, image_count, cache_hits,
-                                   est_input_tokens, est_output_tokens, est_saved_tokens, note)
-            values (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                                   est_input_tokens, est_output_tokens, est_saved_tokens, note,
+                                   campaign_id, cached_input_tokens, cost_usd, saved_cost_usd)
+            values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (kind, vendor, model, image_count, cache_hits,
-             est_input_tokens, est_output_tokens, est_saved_tokens, note),
+             est_input_tokens, est_output_tokens, est_saved_tokens, note,
+             campaign_id, cached_input_tokens, cost, saved_cost),
         )
+
+
+# --- prices · exchange rate · budget ----------------------------------------
+
+USD_KRW_STATE_KEY = "usd_krw"
+BUDGET_STATE_KEY = "usage_budget"
+# 환율 기본값. 실제 환율이 아니라 시작값이며, 화면에서 고쳐 쓰라고 안내합니다.
+DEFAULT_USD_KRW = 1400.0
+BUDGET_WARN_LEVELS = (70, 90)
+
+
+def list_model_prices() -> List[Dict[str, Any]]:
+    with get_conn() as conn:
+        rows = conn.execute("select * from model_prices order by vendor, model").fetchall()
+    return [dict(r) for r in rows]
+
+
+def get_model_price(vendor: str, model: str) -> Optional[Dict[str, Any]]:
+    with get_conn() as conn:
+        row = _price_row(conn, vendor, model)
+    return dict(row) if row else None
+
+
+def save_model_price(
+    vendor: str,
+    model: str,
+    input_per_mtok: float,
+    output_per_mtok: float,
+    cached_input_per_mtok: Optional[float] = None,
+) -> int:
+    """단가를 저장하고, 그 모델의 '단가 미등록'(금액 없음) 기록을 이 단가로 한 번 채웁니다.
+
+    이미 금액이 있는 기록은 그때 단가로 계산한 값이라 건드리지 않습니다 — 단가를 바꿔도
+    과거 금액이 바뀌지 않게. 돌려주는 값은 새로 채운 기록 수입니다.
+    """
+    vendor, model = (vendor or "").strip(), (model or "").strip()
+    if not vendor or not model:
+        raise ValueError("벤더와 모델 이름이 필요합니다.")
+    for value in (input_per_mtok, output_per_mtok, cached_input_per_mtok):
+        if value is not None and value < 0:
+            raise ValueError("단가는 0 이상이어야 합니다.")
+    with get_conn() as conn:
+        conn.execute(
+            """
+            insert into model_prices (vendor, model, input_per_mtok, output_per_mtok, cached_input_per_mtok)
+            values (?, ?, ?, ?, ?)
+            on conflict (vendor, model) do update set
+                input_per_mtok = excluded.input_per_mtok,
+                output_per_mtok = excluded.output_per_mtok,
+                cached_input_per_mtok = excluded.cached_input_per_mtok,
+                updated_at = datetime('now')
+            """,
+            (vendor, model, float(input_per_mtok), float(output_per_mtok),
+             None if cached_input_per_mtok is None else float(cached_input_per_mtok)),
+        )
+        price = _price_row(conn, vendor, model)
+        rows = conn.execute(
+            "select id, est_input_tokens, est_output_tokens, cached_input_tokens, est_saved_tokens "
+            "from usage_log where vendor = ? and model = ? and cost_usd is null",
+            (vendor, model),
+        ).fetchall()
+        for r in rows:
+            cost = compute_cost_usd(price, r["est_input_tokens"], r["est_output_tokens"], r["cached_input_tokens"])
+            saved = (r["est_saved_tokens"] * price["input_per_mtok"] / 1_000_000) if r["est_saved_tokens"] else None
+            conn.execute("update usage_log set cost_usd = ?, saved_cost_usd = ? where id = ?", (cost, saved, r["id"]))
+    return len(rows)
+
+
+def delete_model_price(vendor: str, model: str) -> None:
+    """단가만 지웁니다. 이미 계산된 과거 금액은 그대로 둡니다."""
+    with get_conn() as conn:
+        conn.execute("delete from model_prices where vendor = ? and model = ?", (vendor, model))
+
+
+def usage_models() -> List[Dict[str, Any]]:
+    """단가 표에 보여 줄 (벤더, 모델) — 실제로 호출된 모델 + 등록된 LLM 모델 + 단가가 있는 모델."""
+    with get_conn() as conn:
+        seen = conn.execute(
+            "select distinct vendor, model from usage_log where vendor is not null and model is not null"
+        ).fetchall()
+        registered = conn.execute("select vendor, model_name as model from llm_settings").fetchall()
+        priced = conn.execute("select vendor, model from model_prices").fetchall()
+    out, keys = [], set()
+    for r in list(seen) + list(registered) + list(priced):
+        key = (r["vendor"], r["model"])
+        if key not in keys and key[0] and key[1]:
+            keys.add(key)
+            out.append({"vendor": key[0], "model": key[1]})
+    return sorted(out, key=lambda x: (x["vendor"], x["model"]))
+
+
+def get_usd_krw() -> float:
+    value = (get_app_state(USD_KRW_STATE_KEY) or {}).get("value")
+    try:
+        rate = float(value)
+    except (TypeError, ValueError):
+        return DEFAULT_USD_KRW
+    return rate if rate > 0 else DEFAULT_USD_KRW
+
+
+def set_usd_krw(rate: float) -> None:
+    if rate is None or float(rate) <= 0:
+        raise ValueError("환율은 0보다 커야 합니다.")
+    set_app_state(USD_KRW_STATE_KEY, {"value": float(rate)})
+
+
+def get_monthly_budget_krw() -> Optional[float]:
+    value = (get_app_state(BUDGET_STATE_KEY) or {}).get("monthly_krw")
+    try:
+        budget = float(value)
+    except (TypeError, ValueError):
+        return None
+    return budget if budget > 0 else None
+
+
+def set_monthly_budget_krw(amount: Optional[float]) -> None:
+    """월 예산(원). None이나 0이면 예산 경고를 끕니다."""
+    if not amount or float(amount) <= 0:
+        set_app_state(BUDGET_STATE_KEY, {"monthly_krw": None})
+        return
+    set_app_state(BUDGET_STATE_KEY, {"monthly_krw": float(amount)})
+
+
+_COST_SELECT = """
+    count(*)                                        as calls,
+    coalesce(sum(est_input_tokens), 0)              as input_tokens,
+    coalesce(sum(est_output_tokens), 0)             as output_tokens,
+    coalesce(sum(cached_input_tokens), 0)           as cached_input_tokens,
+    coalesce(sum(est_saved_tokens), 0)              as saved_tokens,
+    coalesce(sum(cost_usd), 0)                      as cost_usd,
+    coalesce(sum(saved_cost_usd), 0)                as saved_cost_usd,
+    coalesce(sum(case when cost_usd is null and (est_input_tokens + est_output_tokens) > 0
+                      then 1 else 0 end), 0)        as unpriced_calls
+"""
+
+
+def _cost_summary(where: str = "", params: tuple = ()) -> Dict[str, Any]:
+    with get_conn() as conn:
+        row = conn.execute(f"select {_COST_SELECT} from usage_log {where}", params).fetchone()
+    out = dict(row)
+    rate = get_usd_krw()
+    out["cost_krw"] = out["cost_usd"] * rate
+    out["saved_cost_krw"] = out["saved_cost_usd"] * rate
+    return out
+
+
+def cost_today() -> Dict[str, Any]:
+    return _cost_summary("where date(ts, 'localtime') = date('now', 'localtime')")
+
+
+def cost_this_month() -> Dict[str, Any]:
+    return _cost_summary("where strftime('%Y-%m', ts, 'localtime') = strftime('%Y-%m', 'now', 'localtime')")
+
+
+def cost_all_time() -> Dict[str, Any]:
+    return _cost_summary()
+
+
+def cost_for_campaign(campaign_id: str, since_id: Optional[int] = None) -> Dict[str, Any]:
+    """한 글의 비용. `since_id`를 주면 그 기록 뒤의 호출만(=이번 생성 실행만) 셉니다."""
+    if since_id is None:
+        return _cost_summary("where campaign_id = ?", (campaign_id,))
+    return _cost_summary("where campaign_id = ? and id > ?", (campaign_id, since_id))
+
+
+def last_usage_id() -> int:
+    with get_conn() as conn:
+        return conn.execute("select coalesce(max(id), 0) as n from usage_log").fetchone()["n"]
+
+
+def cost_by_model() -> List[Dict[str, Any]]:
+    with get_conn() as conn:
+        rows = conn.execute(
+            f"select vendor, model, {_COST_SELECT} from usage_log group by vendor, model "
+            "order by cost_usd desc, calls desc"
+        ).fetchall()
+    rate = get_usd_krw()
+    out = []
+    for r in rows:
+        d = dict(r)
+        d["cost_krw"] = d["cost_usd"] * rate
+        out.append(d)
+    return out
+
+
+def generated_post_count() -> int:
+    """생성이 끝난 글 수(초안 이후 단계) — 글 1건당 평균 금액의 분모."""
+    with get_conn() as conn:
+        return conn.execute(
+            "select count(*) as n from campaigns where status in ('draft', 'ready_to_publish', 'published')"
+        ).fetchone()["n"]
+
+
+def budget_status() -> Dict[str, Any]:
+    """이번 달 사용액이 월 예산의 몇 %인지. 예산이 없으면 level=None.
+
+    level: None(예산 없음 또는 70% 미만) · 70 · 90 · 100(초과).
+    """
+    budget = get_monthly_budget_krw()
+    month = cost_this_month()
+    spent = month["cost_krw"]
+    out = {"budget_krw": budget, "spent_krw": spent, "ratio": None, "level": None,
+           "unpriced_calls": month["unpriced_calls"]}
+    if not budget:
+        return out
+    ratio = spent / budget
+    out["ratio"] = ratio
+    if ratio >= 1:
+        out["level"] = 100
+    else:
+        for lvl in reversed(BUDGET_WARN_LEVELS):
+            if ratio * 100 >= lvl:
+                out["level"] = lvl
+                break
+    return out
+
+
+def budget_message(status: Optional[Dict[str, Any]] = None) -> Optional[str]:
+    """예산 경고 문구 (경고할 것이 없으면 None). 대시보드·워크벤치·사용량 탭이 같은 문구를 씁니다."""
+    st = status or budget_status()
+    if not st.get("level"):
+        return None
+    pct = st["ratio"] * 100
+    head = "⛔ 이번 달 AI 사용 예산을 넘었습니다" if st["level"] >= 100 else f"⚠️ 이번 달 AI 사용 예산의 {st['level']}%를 넘었습니다"
+    return (f"{head} — 약 {st['spent_krw']:,.0f}원 / 예산 {st['budget_krw']:,.0f}원 ({pct:.0f}%). "
+            "생성은 계속할 수 있습니다. 금액은 등록한 단가로 계산한 추정값입니다.")
 
 
 def usage_totals() -> Dict[str, int]:
@@ -926,3 +1257,284 @@ def recent_usage(limit: int = 30) -> List[Dict[str, Any]]:
     with get_conn() as conn:
         rows = conn.execute("select * from usage_log order by id desc limit ?", (limit,)).fetchall()
     return [dict(r) for r in rows]
+
+
+# --- calendar: schedule · topics · recurring rules ---------------------------
+
+RULE_WEEKS_AHEAD = 4
+WEEKDAY_LABELS = ("월", "화", "수", "목", "금", "토", "일")
+
+
+def _valid_date(value: Optional[str]) -> Optional[str]:
+    """'YYYY-MM-DD'로 정리합니다. 비었거나 날짜가 아니면 None."""
+    text = (value or "").strip()[:10]
+    if not text:
+        return None
+    try:
+        return date.fromisoformat(text).isoformat()
+    except ValueError:
+        return None
+
+
+def _valid_datetime(value: Optional[str]) -> Optional[str]:
+    """'YYYY-MM-DD HH:MM'로 정리합니다(로컬 시각). 날짜만 있으면 09:00."""
+    text = (value or "").strip().replace("T", " ")
+    if not text:
+        return None
+    for fmt, width in (("%Y-%m-%d %H:%M:%S", 19), ("%Y-%m-%d %H:%M", 16), ("%Y-%m-%d", 10)):
+        try:
+            parsed = datetime.strptime(text[:width], fmt)
+        except ValueError:
+            continue
+        if fmt == "%Y-%m-%d":
+            parsed = parsed.replace(hour=9)
+        return parsed.strftime("%Y-%m-%d %H:%M")
+    return None
+
+
+def set_campaign_schedule(
+    campaign_id: str,
+    scheduled_date: Optional[str] = None,
+    series_name: Optional[str] = None,
+    auto_generate_at: Optional[str] = None,
+) -> Dict[str, Optional[str]]:
+    """예정일·시리즈·자동 작성 시각을 한 번에 저장합니다. 형식이 틀린 값은 비웁니다."""
+    fields = {
+        "scheduled_date": _valid_date(scheduled_date),
+        "series_name": (series_name or "").strip() or None,
+        "auto_generate_at": _valid_datetime(auto_generate_at),
+    }
+    update_campaign(campaign_id, **fields)
+    return fields
+
+
+def move_campaign_date(campaign_id: str, new_date: Optional[str]) -> None:
+    update_campaign(campaign_id, scheduled_date=_valid_date(new_date))
+
+
+def scheduled_campaigns(start: str, end: str, brand_kit_id: Optional[int] = None) -> List[Dict[str, Any]]:
+    """[start, end] 사이에 예정일이 있는 글 (날짜 문자열 비교 — 'YYYY-MM-DD')."""
+    sql = "select * from campaigns where scheduled_date between ? and ?"
+    params: list = [start, end]
+    if brand_kit_id is not None:
+        sql += " and brand_kit_id = ?"
+        params.append(brand_kit_id)
+    sql += " order by scheduled_date, created_at"
+    with get_conn() as conn:
+        rows = conn.execute(sql, tuple(params)).fetchall()
+    return [_decode(r, _CAMPAIGN_JSON_COLS, _CAMPAIGN_BOOL_COLS) for r in rows]
+
+
+def unscheduled_campaigns(brand_kit_id: Optional[int] = None) -> List[Dict[str, Any]]:
+    """예정일이 없고 아직 게시되지 않은 글 — 캘린더 빈 날짜에 배치할 후보."""
+    sql = "select * from campaigns where scheduled_date is null and status != 'published'"
+    params: list = []
+    if brand_kit_id is not None:
+        sql += " and brand_kit_id = ?"
+        params.append(brand_kit_id)
+    sql += " order by created_at desc"
+    with get_conn() as conn:
+        rows = conn.execute(sql, tuple(params)).fetchall()
+    return [_decode(r, _CAMPAIGN_JSON_COLS, _CAMPAIGN_BOOL_COLS) for r in rows]
+
+
+def is_overdue(campaign: Dict[str, Any], today: Optional[date] = None) -> bool:
+    """예정일이 지났는데 아직 게시되지 않은 글."""
+    when = _valid_date(campaign.get("scheduled_date"))
+    if not when or campaign.get("status") == "published":
+        return False
+    return date.fromisoformat(when) < (today or date.today())
+
+
+def overdue_count(brand_kit_id: Optional[int] = None) -> int:
+    sql = "select count(*) as n from campaigns where scheduled_date < ? and status != 'published'"
+    params: list = [date.today().isoformat()]
+    if brand_kit_id is not None:
+        sql += " and brand_kit_id = ?"
+        params.append(brand_kit_id)
+    with get_conn() as conn:
+        return conn.execute(sql, tuple(params)).fetchone()["n"]
+
+
+def due_auto_generation(now: Optional[datetime] = None) -> List[Dict[str, Any]]:
+    """자동 작성 시각이 지났고, 아직 초안이 없는 글.
+
+    생성 중·게시된 글은 제외합니다. 메모도 뉴스 원문도 없는 글은 쓸 재료가 없어
+    여기서 거르지 않고 실행기가 실패로 기록합니다(왜 안 됐는지 보이게).
+    """
+    stamp = (now or datetime.now()).strftime("%Y-%m-%d %H:%M")
+    with get_conn() as conn:
+        rows = conn.execute(
+            """
+            select * from campaigns
+            where auto_generate_at is not null and auto_generate_at <= ?
+              and status in ('awaiting_media', 'queued', 'failed')
+              and (content is null or trim(content) = '')
+            order by auto_generate_at
+            """,
+            (stamp,),
+        ).fetchall()
+    return [_decode(r, _CAMPAIGN_JSON_COLS, _CAMPAIGN_BOOL_COLS) for r in rows]
+
+
+def list_topics(include_linked: bool = True, brand_kit_id: Optional[int] = None) -> List[Dict[str, Any]]:
+    sql = "select * from topics"
+    clauses, params = [], []
+    if not include_linked:
+        clauses.append("campaign_id is null")
+    if brand_kit_id is not None:
+        clauses.append("brand_kit_id = ?")
+        params.append(brand_kit_id)
+    if clauses:
+        sql += " where " + " and ".join(clauses)
+    sql += " order by case when planned_date is null then 1 else 0 end, planned_date, id"
+    with get_conn() as conn:
+        rows = conn.execute(sql, tuple(params)).fetchall()
+    return [dict(r) for r in rows]
+
+
+def get_topic(topic_id: int) -> Optional[Dict[str, Any]]:
+    with get_conn() as conn:
+        row = conn.execute("select * from topics where id = ?", (topic_id,)).fetchone()
+    return dict(row) if row else None
+
+
+def add_topic(
+    title: str,
+    memo: Optional[str] = None,
+    brand_kit_id: Optional[int] = None,
+    content_mode: Optional[str] = None,
+    planned_date: Optional[str] = None,
+    series_name: Optional[str] = None,
+) -> int:
+    cleaned = (title or "").strip()
+    if not cleaned and not (memo or "").strip():
+        raise ValueError("주제 제목이나 메모 중 하나는 적어주세요.")
+    with get_conn() as conn:
+        cur = conn.execute(
+            "insert into topics (title, memo, brand_kit_id, content_mode, planned_date, series_name) "
+            "values (?, ?, ?, ?, ?, ?)",
+            (cleaned, (memo or "").strip() or None, brand_kit_id, content_mode or None,
+             _valid_date(planned_date), (series_name or "").strip() or None),
+        )
+        return cur.lastrowid
+
+
+_TOPIC_FIELDS = ("title", "memo", "brand_kit_id", "content_mode", "planned_date", "series_name")
+
+
+def update_topic(topic_id: int, **fields) -> None:
+    clean = {k: v for k, v in fields.items() if k in _TOPIC_FIELDS}
+    if "planned_date" in clean:
+        clean["planned_date"] = _valid_date(clean["planned_date"])
+    if not clean:
+        return
+    assignments = ", ".join(f"{k} = ?" for k in clean)
+    with get_conn() as conn:
+        conn.execute(
+            f"update topics set {assignments}, updated_at = datetime('now') where id = ?",
+            tuple(clean.values()) + (topic_id,),
+        )
+
+
+def delete_topic(topic_id: int) -> None:
+    """주제를 지웁니다. 이미 만든 글은 그대로 남습니다."""
+    with get_conn() as conn:
+        conn.execute("delete from topics where id = ?", (topic_id,))
+
+
+def topic_to_campaign(topic_id: int) -> Dict[str, Any]:
+    """주제로 새 글을 만들고(메모·킷·모드·예정일·시리즈를 채워) 주제에 연결합니다.
+
+    이미 연결된 글이 있으면 그 글을 돌려줍니다 — 두 번 눌러도 글이 두 개 생기지 않게.
+    """
+    topic = get_topic(topic_id)
+    if not topic:
+        raise ValueError("주제를 찾을 수 없습니다.")
+    if topic.get("campaign_id"):
+        existing = get_campaign(topic["campaign_id"])
+        if existing:
+            return existing
+    memo_parts = [p for p in ((topic.get("title") or "").strip(), (topic.get("memo") or "").strip()) if p]
+    created = insert_campaign(
+        source_type="manual", status="awaiting_media",
+        memo="\n".join(memo_parts) or None,
+        brand_kit_id=topic.get("brand_kit_id"),
+    )
+    update_campaign(
+        created["id"], content_mode=topic.get("content_mode") or None,
+        scheduled_date=_valid_date(topic.get("planned_date")),
+        series_name=topic.get("series_name") or None,
+    )
+    with get_conn() as conn:
+        conn.execute("update topics set campaign_id = ?, updated_at = datetime('now') where id = ?",
+                     (created["id"], topic_id))
+    return get_campaign(created["id"])
+
+
+def list_rules() -> List[Dict[str, Any]]:
+    with get_conn() as conn:
+        rows = conn.execute("select * from schedule_rules order by weekday, id").fetchall()
+    return [dict(r) for r in rows]
+
+
+def add_rule(
+    weekday: int,
+    brand_kit_id: Optional[int] = None,
+    content_mode: Optional[str] = None,
+    title: str = "",
+    series_name: Optional[str] = None,
+) -> int:
+    if not 0 <= int(weekday) <= 6:
+        raise ValueError("요일이 올바르지 않습니다.")
+    with get_conn() as conn:
+        cur = conn.execute(
+            "insert into schedule_rules (weekday, brand_kit_id, content_mode, title, series_name) values (?, ?, ?, ?, ?)",
+            (int(weekday), brand_kit_id, content_mode or None, (title or "").strip(),
+             (series_name or "").strip() or None),
+        )
+        return cur.lastrowid
+
+
+def delete_rule(rule_id: int, remove_empty_slots: bool = True) -> int:
+    """규칙을 지웁니다. `remove_empty_slots`면 그 규칙이 만든 자리 중 아직 글로 만들지 않은 것도 지웁니다."""
+    with get_conn() as conn:
+        removed = 0
+        if remove_empty_slots:
+            removed = conn.execute(
+                "delete from topics where rule_id = ? and campaign_id is null", (rule_id,)
+            ).rowcount
+        conn.execute("update topics set rule_id = null where rule_id = ?", (rule_id,))
+        conn.execute("delete from schedule_rules where id = ?", (rule_id,))
+    return removed
+
+
+def rule_dates(weekday: int, start: Optional[date] = None, weeks: int = RULE_WEEKS_AHEAD) -> List[str]:
+    """오늘(포함)부터 `weeks`주 안의 그 요일 날짜들."""
+    start = start or date.today()
+    first = start + timedelta(days=(int(weekday) - start.weekday()) % 7)
+    return [(first + timedelta(weeks=i)).isoformat() for i in range(weeks)]
+
+
+def apply_rules(start: Optional[date] = None, weeks: int = RULE_WEEKS_AHEAD) -> int:
+    """켜져 있는 규칙마다 앞으로 `weeks`주의 빈 자리(주제)를 만듭니다.
+
+    같은 규칙·같은 날짜의 자리가 이미 있으면 건너뛰므로 여러 번 불러도 겹치지 않습니다.
+    담당자가 지운 자리는 다음에 이 함수를 부를 때 다시 생깁니다 — 그래서 캘린더는 화면을 열 때마다
+    부르지 않고, 규칙을 추가할 때와 [규칙으로 자리 만들기]를 누를 때만 부릅니다. 만든 자리 수를 돌려줍니다.
+    """
+    created = 0
+    for rule in list_rules():
+        if not rule.get("is_active"):
+            continue
+        label = rule.get("title") or f"매주 {WEEKDAY_LABELS[rule['weekday']]}요일 글"
+        for day in rule_dates(rule["weekday"], start, weeks):
+            with get_conn() as conn:
+                cur = conn.execute(
+                    "insert or ignore into topics (title, brand_kit_id, content_mode, planned_date, series_name, rule_id) "
+                    "values (?, ?, ?, ?, ?, ?)",
+                    (label, rule.get("brand_kit_id"), rule.get("content_mode"), day,
+                     rule.get("series_name"), rule["id"]),
+                )
+                created += cur.rowcount
+    return created

@@ -294,17 +294,29 @@ BLOG_SYSTEM_PROMPT_BASE = (
 )
 
 
-def build_blog_system_prompt(brand_kit: dict, mode: dict | None = None) -> str:
+# 서식을 켠 글에서는 "#를 쓰지 말라"는 문장을 서식 지시로 바꿉니다 — 같은 프롬프트 안에서
+# 두 지시가 부딪치면 모델이 어느 쪽을 따를지 알 수 없습니다(ai_workers/formatting.py).
+_PLAIN_ONLY_SENTENCE = "마크다운 제목 기호(#)는 쓰지 말고, 문단으로만 구성하세요."
+_FORMATTED_SENTENCE = "서식은 아래 [원고 서식]에 정한 표시만 쓰세요."
+
+
+def build_blog_system_prompt(brand_kit: dict, mode: dict | None = None, design_instruction: str | None = None) -> str:
     """Full Naver-blog system prompt: base + persona + facts + few-shot +
-    glossary + (mode-dependent) keyword pressure and length target."""
+    glossary + (mode-dependent) keyword pressure and length target, and — when
+    the post's 서식 강도 isn't '사용 안 함' — the formatting instruction."""
     profile = mode or content_mode.resolve(None, brand_kit)
-    parts = [BLOG_SYSTEM_PROMPT_BASE]
+    base = BLOG_SYSTEM_PROMPT_BASE
+    if design_instruction:
+        base = base.replace(_PLAIN_ONLY_SENTENCE, _FORMATTED_SENTENCE)
+    parts = [base]
     parts += persona_block(brand_kit)
     parts += core_facts_block(brand_kit)
     parts += few_shot_block(brand_kit)
     parts += terminology_block(brand_kit)
     parts += seo_block(brand_kit, profile.get("hint", content_mode.HINT_RELEVANCE))
     parts += length_block(profile.get("length_range"))
+    if design_instruction:
+        parts.append(design_instruction)
     return "\n\n".join(parts)
 
 

@@ -27,10 +27,12 @@ Stage order, and why:
 from __future__ import annotations
 
 import re
+import contextvars
+import functools
 from concurrent.futures import ThreadPoolExecutor
 from typing import Callable, Dict, List, Optional
 
-from ai_workers import body_variety, content_mode
+from ai_workers import body_variety, content_mode, formatting
 from ai_workers.guardrail import (
     apply_blacklist_dictionary,
     apply_guardrail_if_enabled,
@@ -284,6 +286,89 @@ def measure_length(content: str, target=None) -> Dict:
     return out
 
 
+def _submit(pool: ThreadPoolExecutor, fn: Callable, *args):
+    """pool.submit that carries the caller's context into the worker thread.
+
+    ThreadPoolExecutor doesn't propagate contextvars, and repo.usage_scope
+    (which glues each LLM call's cost to the campaign being generated) is one.
+    Without this, the SNS writers' and search-intent calls would be logged
+    with no campaign and drop out of "이 글 생성 비용".
+    """
+    return pool.submit(contextvars.copy_context().run, fn, *args)
+
+
+def _attributed(fn: Callable) -> Callable:
+    """Runs a campaign job inside repo.usage_scope(campaign_id), so every LLM
+    call it makes is recorded against that campaign (요청 3: 글별 비용)."""
+    @functools.wraps(fn)
+    def wrapper(campaign_id: str, *args, **kwargs):
+        with repo.usage_scope(campaign_id):
+            return fn(campaign_id, *args, **kwargs)
+    return wrapper
+
+
+def run_cost(campaign_id: str, since_id: int) -> Dict:
+    """What this run cost — the usage rows logged for this campaign after `since_id`."""
+    summary = repo.cost_for_campaign(campaign_id, since_id=since_id)
+    return {
+        "calls": summary["calls"],
+        "input_tokens": summary["input_tokens"],
+        "output_tokens": summary["output_tokens"],
+        "cost_usd": summary["cost_usd"],
+        "cost_krw": summary["cost_krw"],
+        "unpriced_calls": summary["unpriced_calls"],
+    }
+
+
+def _format_report(content: str, content_format: dict) -> Dict:
+    """리포트에 남길 서식 요약 — 종류별 수, 교정으로 자리를 잃어 뺀 수."""
+    counts = formatting.summary(content, content_format)
+    return {
+        "strength": (content_format or {}).get("strength"),
+        "template": (content_format or {}).get("template"),
+        "items": len((content_format or {}).get("items") or []),
+        "dropped": int((content_format or {}).get("dropped") or 0) + counts.get("unmatched", 0),
+        "counts": {k: v for k, v in counts.items() if k != "unmatched" and v},
+    }
+
+
+@_attributed
+def apply_format(campaign_id: str, strength: Optional[str] = None, progress: Progress = None) -> Dict:
+    """[서식 적용] — 이미 생성된 글에 재생성 없이 서식만 입힙니다 (LLM 1회).
+
+    본문 글자는 바꾸지 않습니다. 모델이 고른 구절이 본문에 그대로 없으면 버리므로(
+    formatting.parse_apply_response), 검수를 다시 할 필요가 없습니다. 비용은 이 글의 비용으로 기록됩니다.
+    """
+    campaign = repo.get_campaign(campaign_id)
+    if not campaign:
+        raise RuntimeError(f"campaign {campaign_id} not found")
+    content = (campaign.get("content") or "").strip()
+    if not content:
+        raise RuntimeError("서식을 입힐 본문이 없습니다. 먼저 초안을 생성하세요.")
+    brand_kit = repo.get_campaign_brand_kit(campaign)
+    design = formatting.resolve(strength or campaign.get("design_strength"), brand_kit)
+    if design["strength"] == "none":
+        design["strength"] = formatting.DEFAULT_STRENGTH
+    usage_start = repo.last_usage_id()
+    _report(progress, "서식을 고르는 중…")
+    raw = generate_text(
+        vendor=get_configured_vendor(),
+        prompt=formatting.apply_prompt(content, design["template"], design["strength"],
+                                       bool(campaign.get("storage_file_paths"))),
+        system=formatting.APPLY_SYSTEM_PROMPT,
+        max_tokens=2500,
+        note="format-apply",
+    )
+    items = formatting.parse_apply_response(raw, content)
+    content_format = formatting.finalize(content, items, design["strength"], design["template"], source="apply")
+    report = dict(campaign.get("guardrail_report") or {})
+    report["format"] = _format_report(content, content_format)
+    report["format_cost"] = {**run_cost(campaign_id, usage_start), "kind": "format"}
+    repo.update_campaign(campaign_id, content_format=content_format, guardrail_report=report)
+    _report(progress, "완료")
+    return repo.get_campaign(campaign_id)
+
+
 def _report(progress: Progress, message: str) -> None:
     # 이 print()는 순수 콘솔 디버그용이라 실패해도 무해해야 한다 — 그런데
     # Windows 콘솔의 기본 코드페이지(한국어 환경은 cp949)는 여기 메시지에
@@ -332,7 +417,7 @@ def _quality_pass(
     # concurrently — two sequential LLM round trips become one.
     _report(progress, "검색 의도 충족 점검 중…")
     with ThreadPoolExecutor(max_workers=1) as pool:
-        intent_future = pool.submit(search_intent.run, final_title, draft, target_keywords, vendor)
+        intent_future = _submit(pool, search_intent.run, final_title, draft, target_keywords, vendor)
 
         # --- stage 3: compliance guardrail ---
         if brand_kit.get("guardrail_enabled", True):
@@ -481,6 +566,7 @@ def _quality_pass(
     return final_content, report
 
 
+@_attributed
 def run_pipeline(campaign_id: str, progress: Progress = None) -> Dict:
     """Generates all four channels for a campaign and persists the result.
 
@@ -492,6 +578,7 @@ def run_pipeline(campaign_id: str, progress: Progress = None) -> Dict:
     campaign is already in progress.
     """
     repo.begin_processing(campaign_id)
+    usage_start = repo.last_usage_id()
     try:
         vendor = get_configured_vendor()
         campaign = repo.get_campaign(campaign_id)
@@ -512,6 +599,7 @@ def run_pipeline(campaign_id: str, progress: Progress = None) -> Dict:
         seo_keywords = brand_kit.get("seo_keywords") or []
         mode = content_mode.resolve(campaign.get("content_mode"), brand_kit)
         _report(progress, f"콘텐츠 모드: {mode['icon']} {mode['label']}")
+        design = formatting.resolve(campaign.get("design_strength"), brand_kit)
 
         # --- stage 0: news article (news track only) ---
         article_text = ""
@@ -621,7 +709,10 @@ def run_pipeline(campaign_id: str, progress: Progress = None) -> Dict:
         draft = generate_text(
             vendor=vendor,
             prompt=prompt,
-            system=build_blog_system_prompt(brand_kit, draft_mode),
+            system=build_blog_system_prompt(
+                brand_kit, draft_mode,
+                formatting.instruction(design["template"], design["strength"], bool(storage_file_paths)),
+            ),
             # The ceiling moves with the length target. The target counts
             # characters without spaces; with spaces a Korean post is ~1.3x
             # that, and the tokenizers spend roughly one token per 1~1.5
@@ -634,6 +725,11 @@ def run_pipeline(campaign_id: str, progress: Progress = None) -> Dict:
         generated_title = None
         if needs_title:
             generated_title, draft = _extract_generated_title(draft)
+        # 서식 표시를 바로 떼어 냅니다 — 이 뒤의 검수·SEO·교정·SNS 단계는 평문 본문만 봅니다
+        # (ai_workers/formatting.py). 서식은 맨 끝에 교정된 본문 기준으로 다시 붙입니다.
+        draft, format_items = formatting.extract(draft)
+        if design["strength"] == "none":
+            format_items = []
         final_title = given_title or (generated_title or "").strip() or "제목 미정"
 
         # Checkpoint the paid-for draft before the audit/SEO stages, so an API
@@ -741,6 +837,9 @@ def run_pipeline(campaign_id: str, progress: Progress = None) -> Dict:
             notice_fields, product_fields, target_keywords, progress,
         )
         report.update(sns_report)
+        content_format = formatting.finalize(final_content, format_items, design["strength"], design["template"])
+        report["format"] = _format_report(final_content, content_format)
+        report["cost"] = {**run_cost(campaign_id, usage_start), "kind": "generate"}
 
         repo.update_campaign(
             campaign_id,
@@ -748,6 +847,7 @@ def run_pipeline(campaign_id: str, progress: Progress = None) -> Dict:
             title=final_title,
             source_title=source_title or None,
             content=final_content,
+            content_format=content_format,
             guardrail_passed=report["compliance_pass"],
             guardrail_report=report,
             **sns_fields,
@@ -779,6 +879,7 @@ REVISION_SYSTEM_PROMPT = (
 )
 
 
+@_attributed
 def revise_content(
     campaign_id: str,
     instruction: str = "",
@@ -808,11 +909,18 @@ def revise_content(
     base_content = (campaign.get("content") or "").strip()
     if not base_content:
         raise RuntimeError("수정할 본문이 없습니다. 먼저 초안을 생성하세요.")
+    # 편집창에 담당자가 직접 **굵게** 같은 서식 표시를 넣었으면 서식 목록으로 옮깁니다.
+    previous_format = campaign.get("content_format") or {}
+    format_items = list(previous_format.get("items") or [])
+    if formatting.has_markup(base_content):
+        base_content, typed = formatting.extract(base_content)
+        format_items += typed
 
     instruction = (instruction or "").strip()
     ratio = LENGTH_MODES.get(length_mode, LENGTH_MODES["keep"])["ratio"]
 
     previous_status = repo.begin_processing(campaign_id)
+    usage_start = repo.last_usage_id()
     try:
         vendor = get_configured_vendor()
         brand_kit = repo.get_campaign_brand_kit(campaign)
@@ -918,11 +1026,21 @@ def revise_content(
         report["sns_stale"] = has_sns and (
             bool(previous.get("sns_stale")) or final_content.strip() != (campaign.get("content") or "").strip()
         )
+        design = formatting.resolve(campaign.get("design_strength"), brand_kit)
+        content_format = (
+            formatting.finalize(final_content, format_items, previous_format.get("strength") or design["strength"],
+                                previous_format.get("template") or design["template"],
+                                source=previous_format.get("source") or "generate")
+            if format_items else previous_format
+        )
+        report["format"] = _format_report(final_content, content_format)
+        report["cost"] = {**run_cost(campaign_id, usage_start), "kind": "revise"}
 
         repo.update_campaign(
             campaign_id,
             status="draft",
             content=final_content,
+            content_format=content_format,
             guardrail_passed=report["compliance_pass"],
             guardrail_report=report,
             naver_hashtags=naver_hashtags,
@@ -1108,10 +1226,10 @@ def _secondary_channels(
     }
     with ThreadPoolExecutor(max_workers=SNS_CONCURRENCY) as pool:
         futures = {
-            key: pool.submit(_safe, progress, message, fn, empty[key])
+            key: _submit(pool, _safe, progress, message, fn, empty[key])
             for key, (message, fn) in jobs.items() if key in enabled
         }
-        tags_future = pool.submit(
+        tags_future = _submit(pool, 
             _safe, progress, "네이버 발행 태그 생성 중…",
             lambda: write_naver_hashtags(final_title, final_content, list(target_keywords or []), vendor),
             [],
@@ -1170,6 +1288,7 @@ def _secondary_channels(
 SNS_REPORT_KEYS = ("sns_checks", "sns_compliance", "sns_proofread", "sns_fact_gaps", "sns_channels")
 
 
+@_attributed
 def regenerate_sns(campaign_id: str, progress: Progress = None) -> Dict:
     """Rebuilds Instagram / X / Shorts / Naver tags from the *current* body.
 

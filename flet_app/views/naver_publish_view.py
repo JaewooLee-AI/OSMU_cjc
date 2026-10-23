@@ -20,7 +20,7 @@ import time
 import flet as ft
 
 import flet_app.simulators as sim
-from ai_workers import naver_paste_worker
+from ai_workers import formatting, naver_paste_worker
 from ai_workers.naver_publisher import (
     clear_naver_session,
     naver_session_exists,
@@ -57,10 +57,18 @@ def _publish_error_box(campaign: dict, scale: float) -> list[ft.Control]:
 
 def _fields_for_channel(page: ft.Page, scale: float, campaign: dict, channel: str) -> ft.Control:
     if channel == "naver":
-        return ft.Column([
+        controls = [
             _copy_field("제목", campaign.get("title") or "", page, scale),
+            *_format_summary(campaign, scale),
             _copy_field("본문", campaign.get("content") or "", page, scale),
-        ], spacing=8)
+        ]
+        # 사진 설명은 자동으로 넣지 않습니다(사진을 하나씩 눌러야 나타나는 칸 — 결정 3). 복사해 넣게 보여 줍니다.
+        captions = [i for i in (campaign.get("content_format") or {}).get("items") or [] if i.get("type") == "photo_caption"]
+        for n, item in enumerate(captions, start=1):
+            name = (item.get("path") or "").replace("\\", "/").rsplit("/", 1)[-1]
+            controls.append(_copy_field(f"사진 설명 {n} ({name})", item.get("caption") or "", page, scale,
+                                        "에디터에서 그 사진을 누르면 나오는 설명 칸에 붙여 넣으세요"))
+        return ft.Column(controls, spacing=8)
     if channel == "instagram":
         controls: list[ft.Control] = [
             _copy_field("캡션", campaign.get("instagram_caption") or "", page, scale),
@@ -94,6 +102,25 @@ def _fields_for_channel(page: ft.Page, scale: float, campaign: dict, channel: st
             controls.append(_copy_field("해시태그", " ".join(script["hashtags"]), page, scale))
         return ft.Column(controls, spacing=8)
     return ft.Column()
+
+
+def _format_summary(campaign: dict, scale: float) -> list[ft.Control]:
+    """붙여 넣을 서식 요약 — [지금 게시] 전에 무엇이 들어갈지 확인하게."""
+    fmt = campaign.get("content_format") or {}
+    if not fmt.get("items"):
+        return []
+    content = campaign.get("content") or ""
+    counts = formatting.summary(content, fmt)
+    mode = (repo.get_app_state(formatting.NAVER_FORMAT_STATE_KEY) or {}).get("value") or formatting.DEFAULT_NAVER_FORMAT_MODE
+    parts = ", ".join(f"{formatting.type_label(k)} {v}" for k, v in counts.items() if k != "unmatched" and v)
+    hints = formatting.expected_components(content, fmt)["hint"]
+    text = f"🎨 붙여 넣을 서식: {parts} — 방식: {formatting.NAVER_FORMAT_MODES.get(mode, mode)}"
+    if counts.get("unmatched"):
+        text += f" · 자리를 못 찾아 빠지는 서식 {counts['unmatched']}개"
+    if hints:
+        text += f" · ⚠️ '사진 자리' 안내 줄 {hints}개는 발행 전에 지워야 합니다"
+    return [ft.Container(content=ft.Text(text, size=fs(11, scale), color="#2F6B7A"),
+                         bgcolor="#E7F1F3", padding=8, border_radius=6)]
 
 
 def _build_content_preview(page: ft.Page, scale: float, brand_kit: dict, campaign: dict) -> list[ft.Control]:
@@ -214,12 +241,24 @@ def _build_card(
             tooltip=None if naver_session_exists() else "먼저 네이버에 로그인해주세요.",
         )
         buttons: list[ft.Control] = [publish_button]
+        extra: list[ft.Control] = []
         if allow_manual_complete:
+            url_field = ft.TextField(
+                label="네이버 글 주소 (선택)", hint_text="https://blog.naver.com/아이디/글번호", dense=True, expand=True,
+                tooltip="발행한 글의 주소를 붙여 넣으면 대시보드·캘린더에서 바로 열 수 있습니다.",
+            )
+
             def on_manual(e: ft.Event) -> None:
-                repo.update_campaign(campaign_id, status="published", publish_error=None)
+                if (url_field.value or "").strip() and not repo.normalize_post_url(url_field.value):
+                    publish_status.value = "글 주소 형식이 아닙니다. https://blog.naver.com/... 형태로 넣거나 비워 두세요."
+                    publish_status.color = "#B3261E"
+                    publish_status.update()
+                    return
+                repo.mark_published(campaign_id, url_field.value)
                 refresh_all()
 
             buttons.append(ft.OutlinedButton("✅ 수동으로 완료", on_click=on_manual, expand=True))
+            extra.append(url_field)
 
         def on_ask_delete(e: ft.Event) -> None:
             confirm_delete["value"] = True
@@ -228,7 +267,7 @@ def _build_card(
 
         buttons.append(ft.OutlinedButton("🗑️ 삭제", on_click=on_ask_delete, expand=True))
 
-        return ft.Column([ft.Row(buttons, spacing=8), publish_status], spacing=6)
+        return ft.Column([ft.Row(buttons, spacing=8), *extra, publish_status], spacing=6)
 
     action_box.content = build_actions()
 
@@ -244,8 +283,10 @@ def _build_card(
         ))
     else:
         card_children.append(ft.Text(
-            f"게시: {campaign.get('updated_at', '')}", size=fs(11, scale), color=BRAND_COLORS["text_muted"],
+            f"게시: {campaign.get('published_at') or campaign.get('updated_at', '')}",
+            size=fs(11, scale), color=BRAND_COLORS["text_muted"],
         ))
+        card_children.append(_published_url_row(scale, campaign))
     card_children.append(ft.Text(
         f"🧵 브랜드 킷: {kit_label(campaign.get('brand_kit_id'), campaign.get('brand_kit_name'))}",
         size=fs(11, scale), color=BRAND_COLORS["text_muted"],
@@ -285,6 +326,40 @@ def _build_card(
         content=ft.Column(card_children, spacing=8),
         border=ft.Border.all(1, "#E4DCC8"), border_radius=10, padding=14,
     )
+
+
+def _published_url_row(scale: float, campaign: dict) -> ft.Control:
+    """게시 완료 글의 네이버 주소 — 보기·고치기·열기."""
+    campaign_id = campaign["id"]
+    url_field = ft.TextField(
+        label="네이버 글 주소", value=campaign.get("published_url") or "", dense=True, expand=True,
+        hint_text="https://blog.naver.com/아이디/글번호",
+    )
+    status = ft.Text("", size=fs(11, scale))
+
+    def on_save(e: ft.Event) -> None:
+        ok = repo.set_published_url(campaign_id, url_field.value)
+        status.value = "저장했습니다." if ok else "주소 형식이 아닙니다 (https://blog.naver.com/...)."
+        status.color = "#1B6E3C" if ok else "#B3261E"
+        status.update()
+
+    async def on_open(e: ft.Event) -> None:
+        url = repo.normalize_post_url(url_field.value)
+        if url:
+            await ft.UrlLauncher().launch_url(url)
+        else:
+            status.value = "열 주소가 없습니다."
+            status.color = "#B3261E"
+            status.update()
+
+    return ft.Column([
+        ft.Row([
+            url_field,
+            ft.OutlinedButton("저장", on_click=on_save),
+            ft.IconButton(icon=ft.Icons.OPEN_IN_NEW, tooltip="브라우저로 열기", on_click=on_open),
+        ], spacing=6),
+        status,
+    ], spacing=2)
 
 
 def _build_login_section(page: ft.Page, scale: float, naver_blog_id: str, refresh_all) -> ft.Control:

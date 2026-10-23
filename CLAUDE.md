@@ -4,7 +4,8 @@
 바꾸는 템플릿 용도(예전 "온보딩" 절차)는 더 이상 지원하지 않습니다. 같은 엔진을 쓰는 다른 저장소와
 구조를 맞출 필요도 없으므로, 필요하면 DB 스키마·아키텍처도 바꿉니다 — 단 아래 규칙을 지킵니다.
 
-진행 중인 작업 계획: `docs/작업계획_멀티브랜드킷.md` (진행 규칙·작업 순서·"로컬 검증 필요" 목록).
+작업 계획: `docs/작업계획_멀티브랜드킷.md`(진행 규칙·멀티 브랜드 킷), `docs/작업계획_기능보완_v2.md`
+(대시보드·캘린더·비용 환산·원고 서식 — 가능/조건부/불가 판단과 "로컬 검증 필요" 목록).
 
 ## 반드시 지킬 것
 
@@ -34,10 +35,11 @@ python flet_app/main.py
 
 | 폴더 | 내용 |
 |---|---|
-| `flet_app/` | 데스크톱 앱(유일한 UI). `main.py` 진입점, `views/` 6개 화면, `simulators/` 4채널 미리보기, `theme.py` |
+| `flet_app/` | 데스크톱 앱(유일한 UI). `main.py` 진입점, `views/` 7개 화면(📅 캘린더 포함), `simulators/` 4채널 미리보기, `components/`, `theme.py` |
 | `core/` | `db.py` SQLite 스키마·마이그레이션, `repo.py` 데이터 접근 계층, `storage.py` 사진 저장, `crypto_utils.py` 키 암호화, `brand_seed.py` 첫 실행 시드 |
-| `ai_workers/` | 생성 파이프라인(`content_writer.py`), LLM 라우팅(`multi_llm_router.py`), 사진 분석(`vision.py`), 컴플라이언스(`guardrail.py`), SEO·키워드, 네이버 게시 자동화 |
-| `docs/` | 사용자 매뉴얼 pptx와 생성 스크립트, 작업 계획 |
+| `ai_workers/` | 생성 파이프라인(`content_writer.py`), LLM 라우팅(`multi_llm_router.py`), 사진 분석(`vision.py`), 컴플라이언스(`guardrail.py`), 원고 서식(`formatting.py`), 자동 작성 예약(`auto_scheduler.py`), SEO·키워드, 네이버 게시 자동화 |
+| `tests/` | pytest(LLM 없이, 임시 데이터 폴더) · `live_gemini_check.py`(실제 Gemini 호출, 데이터 복사본으로 수동 실행) |
+| `docs/` | 사용자 매뉴얼 pptx와 생성 스크립트, 작업 계획, 고객 테스트 문서 |
 
 파이프라인 단계 순서와 설계 이유는 `README.md`에 있습니다.
 
@@ -82,6 +84,25 @@ DB 스키마를 바꿀 때는 `core/db.py`의 기존 방식(앱 시작 시 한 �
 `core/brand_seed.py`의 값은 **DB가 비어 있을 때 첫 실행에서 한 번만** '기본' 킷과 회사 공통 값으로 들어갑니다(`seed_if_empty()`).
 그 뒤로는 앱의 🧵 브랜드 킷 화면이 원본이며, 이 파일을 고쳐도 기존 설치에는 반영되지 않습니다.
 이미 저장된 문구를 한 번만 고쳐야 할 때는 `SEED_FIXES`(`apply_seed_fixes()` — 모든 킷의 톤앤매너에 적용)를 씁니다.
+
+## 원고 서식 · AI 비용 · 캘린더 (기능 보완 v2)
+
+- **본문(`campaigns.content`)에 서식 기호를 남기지 않습니다.** 굵게·형광·소제목·인용구·구분선·요약 박스·사진 자리는
+  `campaigns.content_format`(JSON, `ai_workers/formatting.py`)에 따로 둡니다. 검수·SEO·교정·글자 수·SNS 단계가 평문을
+  전제로 돌기 때문입니다. 초안 호출에서 받은 서식 표시는 `formatting.extract`로 바로 떼고, 마지막에 `formatting.finalize`로
+  최종 본문 기준으로 정리합니다. 본문을 새로 받는 경로(직접 편집 저장·수정 반영)도 `has_markup`이면 같은 방식으로 옮깁니다.
+- 네이버에는 서식을 **붙여넣는 HTML에만** 담습니다(`formatting.naver_segments`). 에디터 툴바를 자동으로 누르는 코드를
+  넣지 않습니다(작업계획_멀티브랜드킷.md 결정 3). [서식 적용]은 본문 글자를 바꾸지 않습니다 — 응답의 구절이 본문에
+  그대로 없으면 버립니다.
+- LLM 호출은 `multi_llm_router.generate_text`(또는 `vision`)를 거쳐 `repo.log_usage`로 기록되고, 금액은 **호출 시점**
+  `model_prices` 단가로 `usage_log.cost_usd`에 저장됩니다. 단가가 없으면 null('단가 미등록') — 0으로 채우지 않습니다.
+  가격 기본값을 코드에 넣지 않습니다(사실을 지어내지 않음). 글 하나에 묶이는 작업은 `@_attributed`(= `repo.usage_scope`)로
+  감싸고, 그 안에서 스레드풀을 쓰면 `content_writer._submit`으로 넘깁니다(컨텍스트 전달).
+- 📅 캘린더: `campaigns.scheduled_date`·`series_name`·`auto_generate_at`·`published_url`·`published_at`, 주제 목록 `topics`,
+  반복 규칙 `schedule_rules`. 글을 지울 때는 `repo.delete_campaign`을 써야 주제 연결이 끊깁니다. 자동 작성은 앱이 켜져 있을
+  때만(`auto_scheduler`) 돌고, 발행은 하지 않습니다.
+- 시험: `python -m pytest tests` (LLM·실제 데이터 폴더를 쓰지 않음). 실제 호출 확인은
+  `python tests/live_gemini_check.py <데이터 폴더> <빈 결과 폴더>` — 데이터를 복사본으로 옮겨 돌립니다.
 
 ## 컴플라이언스 감사
 
