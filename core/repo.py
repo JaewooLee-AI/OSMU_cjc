@@ -1063,16 +1063,24 @@ def save_model_price(
             (vendor, model, float(input_per_mtok), float(output_per_mtok),
              None if cached_input_per_mtok is None else float(cached_input_per_mtok)),
         )
-        price = _price_row(conn, vendor, model)
-        rows = conn.execute(
-            "select id, est_input_tokens, est_output_tokens, cached_input_tokens, est_saved_tokens "
-            "from usage_log where vendor = ? and model = ? and cost_usd is null",
-            (vendor, model),
-        ).fetchall()
-        for r in rows:
-            cost = compute_cost_usd(price, r["est_input_tokens"], r["est_output_tokens"], r["cached_input_tokens"])
-            saved = (r["est_saved_tokens"] * price["input_per_mtok"] / 1_000_000) if r["est_saved_tokens"] else None
-            conn.execute("update usage_log set cost_usd = ?, saved_cost_usd = ? where id = ?", (cost, saved, r["id"]))
+        return backfill_unpriced_usage(conn, vendor, model)
+
+
+def backfill_unpriced_usage(conn, vendor: str, model: str) -> int:
+    """그 모델의 '단가 미등록' 기록을 지금 단가로 한 번 채우고, 채운 기록 수를 돌려줍니다.
+    호출하는 쪽의 연결(트랜잭션) 안에서 돕니다 — core/transfer.py의 가져오기도 씁니다."""
+    price = _price_row(conn, vendor, model)
+    if price is None:
+        return 0
+    rows = conn.execute(
+        "select id, est_input_tokens, est_output_tokens, cached_input_tokens, est_saved_tokens "
+        "from usage_log where vendor = ? and model = ? and cost_usd is null",
+        (vendor, model),
+    ).fetchall()
+    for r in rows:
+        cost = compute_cost_usd(price, r["est_input_tokens"], r["est_output_tokens"], r["cached_input_tokens"])
+        saved = (r["est_saved_tokens"] * price["input_per_mtok"] / 1_000_000) if r["est_saved_tokens"] else None
+        conn.execute("update usage_log set cost_usd = ?, saved_cost_usd = ? where id = ?", (cost, saved, r["id"]))
     return len(rows)
 
 

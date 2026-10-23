@@ -5,7 +5,8 @@
 구조를 맞출 필요도 없으므로, 필요하면 DB 스키마·아키텍처도 바꿉니다 — 단 아래 규칙을 지킵니다.
 
 작업 계획: `docs/작업계획_멀티브랜드킷.md`(진행 규칙·멀티 브랜드 킷), `docs/작업계획_기능보완_v2.md`
-(대시보드·캘린더·비용 환산·원고 서식 — 가능/조건부/불가 판단과 "로컬 검증 필요" 목록).
+(대시보드·캘린더·비용 환산·원고 서식 — 가능/조건부/불가 판단과 "로컬 검증 필요" 목록), `docs/작업계획_데이터옮기기.md`
+(📦 담당자 PC 사이 데이터 옮기기 — 표별 결정과 "로컬 검증 필요" 목록).
 
 ## 반드시 지킬 것
 
@@ -36,7 +37,7 @@ python flet_app/main.py
 | 폴더 | 내용 |
 |---|---|
 | `flet_app/` | 데스크톱 앱(유일한 UI). `main.py` 진입점, `views/` 7개 화면(📅 캘린더 포함), `simulators/` 4채널 미리보기, `components/`, `theme.py` |
-| `core/` | `db.py` SQLite 스키마·마이그레이션, `repo.py` 데이터 접근 계층, `storage.py` 사진 저장, `crypto_utils.py` 키 암호화, `brand_seed.py` 첫 실행 시드 |
+| `core/` | `db.py` SQLite 스키마·마이그레이션, `repo.py` 데이터 접근 계층, `storage.py` 사진 저장, `crypto_utils.py` 키 암호화, `brand_seed.py` 첫 실행 시드, `transfer.py` 📦 데이터 옮기기 |
 | `ai_workers/` | 생성 파이프라인(`content_writer.py`), LLM 라우팅(`multi_llm_router.py`), 사진 분석(`vision.py`), 컴플라이언스(`guardrail.py`), 원고 서식(`formatting.py`), 자동 작성 예약(`auto_scheduler.py`), SEO·키워드, 네이버 게시 자동화 |
 | `tests/` | pytest(LLM 없이, 임시 데이터 폴더) · `live_gemini_check.py`(실제 Gemini 호출, 데이터 복사본으로 수동 실행) |
 | `docs/` | 사용자 매뉴얼 pptx와 생성 스크립트, 작업 계획, 고객 테스트 문서 |
@@ -51,7 +52,8 @@ python flet_app/main.py
 2. 그 밖에는 사용자별 폴더 — Windows `%APPDATA%\OSMU_CJC`, macOS `~/Library/Application Support/OSMU_CJC`,
    그 밖 `~/.local/share/OSMU_CJC`
 
-안에는 `osmu.db`(SQLite), `assets/`(사진), `.master_key`(API 키 암호화 키), `naver_state.json`(네이버 로그인 세션)이 있습니다.
+안에는 `osmu.db`(SQLite), `assets/`(사진), `.master_key`(API 키 암호화 키), `naver_state.json`(네이버 로그인 세션),
+`backups/`(📦 데이터 옮기기로 가져오기 직전의 DB 사본, 최근 5개)가 있습니다.
 패키징된 exe(Flet이 `FLET_APP_STORAGE_DATA`를 넣어 줌)는 `PROJECT_ROOT/data`를 **절대 쓰지 않습니다** — 설치형의 `PROJECT_ROOT`는
 `C:\Program Files\OSMU CJC\app`(쓰기 금지, 재설치 때 비워짐)입니다. 배포된 앱 사용자의 데이터는 `%APPDATA%\OSMU_CJC`에 있으며,
 새 버전 설치·재설치·제거로 지워지면 안 됩니다. 앱이 설치 폴더에 파일을 쓰는 코드를 넣지 않습니다(로그·캐시·임시 파일은 데이터 폴더나 임시 폴더로).
@@ -103,6 +105,19 @@ DB 스키마를 바꿀 때는 `core/db.py`의 기존 방식(앱 시작 시 한 �
   때만(`auto_scheduler`) 돌고, 발행은 하지 않습니다.
 - 시험: `python -m pytest tests` (LLM·실제 데이터 폴더를 쓰지 않음). 실제 호출 확인은
   `python tests/live_gemini_check.py <데이터 폴더> <빈 결과 폴더>` — 데이터를 복사본으로 옮겨 돌립니다.
+
+## 📦 데이터 옮기기 (담당자 PC 사이)
+
+`core/transfer.py` — ⚙️ 설정 → 📦 데이터 옮기기. 고른 항목(브랜드 킷·회사 공통·앱 설정·API 키·AI 비용 설정·키워드 측정값·
+제목 이력)만 `.osmu` 파일(JSON, 형식 이름 `osmu-cjc-transfer`)로 내보내고 가져옵니다. 설계와 표별 결정은
+`docs/작업계획_데이터옮기기.md`에 있습니다.
+
+- **테이블을 새로 만들면 `transfer.TABLE_PARTS`에 옮길지(항목 이름) 말지(None) 넣습니다.** 넣지 않으면
+  `tests/test_transfer.py`가 실패합니다. 브랜드 킷·회사 공통·앱 설정에 칸을 더하면 `repo.BRAND_KIT_FIELDS`·
+  `_COMPANY_COLUMNS`·`_APP_SETTINGS_COLUMNS`를 따라 자동으로 옮겨집니다. 옮길 `app_state` 키는 `transfer.APP_STATE_PARTS`에 둡니다.
+- 브랜드 킷은 **이름으로** 맞춥니다. 킷 ID는 PC마다 다르므로 파일에 넣지 않습니다(글·주제·반복 규칙이 받는 PC의 킷 ID를 들고 있음).
+- API 키는 평문으로 파일에 쓰지 않습니다 — 비밀번호로 암호화하고, `.master_key`는 절대 옮기지 않습니다.
+- 가져오기는 한 트랜잭션이고 직전에 데이터 폴더의 `backups/`에 DB를 복사합니다. 설치 폴더에는 쓰지 않습니다.
 
 ## 컴플라이언스 감사
 
