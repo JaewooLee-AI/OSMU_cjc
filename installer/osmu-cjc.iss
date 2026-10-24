@@ -30,6 +30,8 @@
 #endif
 
 #define AppName "씨제이씨협동조합 OSMU 워크벤치"
+; 바로가기용 아이콘 파일 이름 — 버전마다 다르게 ([Files] 참고)
+#define AppIconName "osmu-cjc-" + AppVersion + ".ico"
 
 [Setup]
 ; 절대 바꾸지 않는다 — 바꾸면 기존 설치를 다른 앱으로 보고 두 번 설치된다.
@@ -61,7 +63,14 @@ Compression=lzma2
 SolidCompression=yes
 WizardStyle=modern
 UninstallDisplayName={#AppName}
+#ifdef IconFile
+UninstallDisplayIcon={app}\{#AppIconName}
+#else
 UninstallDisplayIcon={app}\{#AppExe}
+#endif
+; 설치 끝에 탐색기에 아이콘을 다시 읽으라고 알린다(SHChangeNotify). 없으면 재설치해도 바탕화면·시작 메뉴에
+; 예전 아이콘이 캐시로 남는다(2026-10-24 확인: 창 왼쪽 위 아이콘만 바뀌고 바로가기는 그대로).
+ChangesAssociations=yes
 SetupLogging=yes
 
 [Languages]
@@ -78,11 +87,21 @@ Type: filesandordirs; Name: "{app}\*"
 
 [Files]
 Source: "{#SourceDir}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
+#ifdef IconFile
+; 바로가기 아이콘 파일. 이름에 버전을 넣어 버전마다 경로가 달라지게 한다 — Windows 아이콘 캐시는 경로로
+; 찾으므로, 같은 exe 경로를 가리키는 바로가기는 아이콘을 바꿔도 예전 그림을 계속 보여 준다.
+Source: "{#IconFile}"; DestDir: "{app}"; DestName: "{#AppIconName}"; Flags: ignoreversion
+#endif
 
 [Icons]
 ; 시작 메뉴와 바탕화면에 항상 아이콘을 만든다(재설치하면 다시 만든다). 제거하면 함께 지워진다.
+#ifdef IconFile
+Name: "{autoprograms}\{#AppName}"; Filename: "{app}\{#AppExe}"; WorkingDir: "{app}"; IconFilename: "{app}\{#AppIconName}"
+Name: "{autodesktop}\{#AppName}"; Filename: "{app}\{#AppExe}"; WorkingDir: "{app}"; IconFilename: "{app}\{#AppIconName}"
+#else
 Name: "{autoprograms}\{#AppName}"; Filename: "{app}\{#AppExe}"; WorkingDir: "{app}"
 Name: "{autodesktop}\{#AppName}"; Filename: "{app}\{#AppExe}"; WorkingDir: "{app}"
+#endif
 
 [Run]
 Filename: "{app}\{#AppExe}"; Description: "{cm:LaunchProgram,{#AppName}}"; Flags: nowait postinstall skipifsilent

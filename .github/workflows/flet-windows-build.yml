@@ -109,7 +109,7 @@ jobs:
           Copy-Item -Recurse -Path core, ai_workers, flet_app -Destination stage
           Copy-Item -Path flet_app/pyproject.toml -Destination stage/pyproject.toml
           Copy-Item -Path flet_app/main.py -Destination stage/main.py
-          # flet build는 앱 경로의 assets/icon.png를 exe·창 아이콘으로 쓴다 (씨제이씨 로고).
+          # flet build는 앱 경로의 assets/icon.png를 exe·창 아이콘으로 쓴다 (CJC 폴더 아이콘).
           Copy-Item -Recurse -Path flet_app/assets -Destination stage/assets
           Write-Host "----- stage/ 트리 -----"
           Get-ChildItem -Recurse stage | Select-Object -First 80 FullName | Format-Table -AutoSize
@@ -179,6 +179,12 @@ jobs:
           Run-Setup $setup "$PWD\install1.log"
           if (-not (Test-Path $exe)) { throw "1차 설치 후 실행 파일이 없습니다: $exe" }
           if ((Desktop-Links).Count -ne $before + 1) { throw "바탕화면 아이콘이 만들어지지 않았습니다" }
+          # 바로가기 아이콘은 버전이 붙은 .ico를 가리켜야 한다 — exe를 가리키면 Windows 캐시가 예전 그림을 보여 준다
+          $icoName = "osmu-cjc-${{ steps.meta.outputs.version }}.ico"
+          if (-not (Test-Path (Join-Path $dir $icoName))) { throw "바로가기용 아이콘 파일이 없습니다: $icoName" }
+          $shell = New-Object -ComObject WScript.Shell
+          $iconLoc = @(Desktop-Links | ForEach-Object { $shell.CreateShortcut($_.FullName).IconLocation } | Where-Object { $_ -like "*$icoName*" })
+          if ($iconLoc.Count -ne 1) { throw "바탕화면 바로가기가 $icoName 아이콘을 쓰지 않습니다" }
           Check-UserData '1차 설치'
           Write-Host "1차 설치 OK: $exe"
 
