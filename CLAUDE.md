@@ -133,7 +133,7 @@ DB 스키마를 바꿀 때는 `core/db.py`의 기존 방식(앱 시작 시 한 �
 - 빌드 결과는 Inno Setup(`installer/osmu-cjc.iss`)으로 `OSMU-CJC-Setup-{버전}.exe`를 만들고, 그 setup.exe 하나를 zip으로 감싸
   Release에 올립니다(카카오톡 전달용). **`AppId` GUID는 절대 바꾸지 않습니다** — 바꾸면 재설치가 기존 설치를 덮지 못하고 두 번 설치됩니다.
   워크플로가 러너에서 설치·재설치·제거를 실제로 돌려 확인합니다(앱 창 실행은 러너에서 불가 — 로컬 검증).
-- 앱·바로가기·설치 프로그램 아이콘은 `flet_app/assets/icon.png`(씨제이씨 로고, 투명 배경 512×512) 하나에서 만듭니다.
+- 앱·바로가기·설치 프로그램 아이콘은 `flet_app/assets/icon.png`(보라색 둥근 사각형에 씨제이씨 로고·'씨제이씨협동조합 OSMU' 글자, 모서리 밖은 투명, 512×512) 하나에서 만듭니다.
   `flet build`가 exe 아이콘으로 쓰고, 워크플로가 같은 파일로 설치 프로그램용 `.ico`를 만듭니다.
 - flet은 `1.0.2`로 고정합니다. 올릴 때는 flet·flet-cli·flet-desktop이 모두 같은 버전으로 PyPI에 올라와 있는지 확인합니다.
 - **`flet_app/pyproject.toml`의 `jni_flutter = "1.0.3"` 고정을 유지합니다.** 1.0.4 이상은 flet 1.0.2 템플릿(jni 1.0.0)과
