@@ -182,9 +182,14 @@ jobs:
           # 바로가기 아이콘은 버전이 붙은 .ico를 가리켜야 한다 — exe를 가리키면 Windows 캐시가 예전 그림을 보여 준다
           $icoName = "osmu-cjc-${{ steps.meta.outputs.version }}.ico"
           if (-not (Test-Path (Join-Path $dir $icoName))) { throw "바로가기용 아이콘 파일이 없습니다: $icoName" }
+          # IconLocation은 경로를 환경 변수 꼴로 저장하면 다르게 보일 수 있어, .lnk 파일 안에 이름이 있는지로 확인한다.
           $shell = New-Object -ComObject WScript.Shell
-          $iconLoc = @(Desktop-Links | ForEach-Object { $shell.CreateShortcut($_.FullName).IconLocation } | Where-Object { $_ -like "*$icoName*" })
-          if ($iconLoc.Count -ne 1) { throw "바탕화면 바로가기가 $icoName 아이콘을 쓰지 않습니다" }
+          $withIcon = @(Desktop-Links | Where-Object {
+            Write-Host "바로가기 $($_.Name) → IconLocation=$($shell.CreateShortcut($_.FullName).IconLocation)"
+            $bytes = [IO.File]::ReadAllBytes($_.FullName)
+            ([Text.Encoding]::Unicode.GetString($bytes) + [Text.Encoding]::Default.GetString($bytes)) -like "*$icoName*"
+          })
+          if ($withIcon.Count -ne 1) { throw "바탕화면 바로가기가 $icoName 아이콘을 쓰지 않습니다" }
           Check-UserData '1차 설치'
           Write-Host "1차 설치 OK: $exe"
 
